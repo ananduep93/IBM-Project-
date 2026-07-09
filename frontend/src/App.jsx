@@ -629,7 +629,7 @@ function App() {
                 </button>
               </nav>
 
-              <div className="tab-pane">
+              <div className={`tab-pane ${activeTab}-active`}>
                 {/* TAB 1: Summary Panel */}
                 {activeTab === 'summary' && (
                   loadingSummary ? (
