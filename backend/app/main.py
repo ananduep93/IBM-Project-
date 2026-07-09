@@ -220,6 +220,12 @@ def handle_exception(e: Exception, context: str):
             status_code=429,
             detail="Rate limit reached (Gemini API). Please wait 15-30 seconds and try again."
         )
+    elif "SSL" in err_msg or "EOF" in err_msg or "connection" in err_msg.lower():
+        logger.warning(f"Gemini API SSL/Network error during {context}: {err_msg}")
+        raise HTTPException(
+            status_code=503,
+            detail="Temporary network connection issue with the AI. Please try again in a moment."
+        )
     logger.error(f"Failed to {context}: {err_msg}")
     raise HTTPException(status_code=500, detail=err_msg)
 
@@ -236,6 +242,14 @@ def get_summary_endpoint(doc_id: str, x_client_id: str = Header(default="anonymo
         summary = generate_summary(doc["gemini_name"])
         return {"summary": summary}
     except Exception as e:
+        err_msg = str(e)
+        if "SSL" in err_msg or "EOF" in err_msg or "connection" in err_msg.lower():
+            logger.info("SSL/EOF network glitch detected. Retrying generate_summary once...")
+            try:
+                summary = generate_summary(doc["gemini_name"])
+                return {"summary": summary}
+            except Exception as retry_e:
+                handle_exception(retry_e, "generate summary")
         handle_exception(e, "generate summary")
 
 @app.post("/api/documents/{doc_id}/extract")
@@ -251,6 +265,14 @@ def get_extracted_entities(doc_id: str, x_client_id: str = Header(default="anony
         entities = extract_entities(doc["gemini_name"])
         return {"entities": entities}
     except Exception as e:
+        err_msg = str(e)
+        if "SSL" in err_msg or "EOF" in err_msg or "connection" in err_msg.lower():
+            logger.info("SSL/EOF network glitch detected. Retrying extract_entities once...")
+            try:
+                entities = extract_entities(doc["gemini_name"])
+                return {"entities": entities}
+            except Exception as retry_e:
+                handle_exception(retry_e, "extract entities")
         handle_exception(e, "extract entities")
 
 @app.post("/api/documents/{doc_id}/rewrite")
@@ -266,6 +288,14 @@ def get_rewritten_text(doc_id: str, payload: RewritePayload, x_client_id: str = 
         rewritten = rewrite_text(doc["gemini_name"], payload.tone)
         return {"rewritten": rewritten}
     except Exception as e:
+        err_msg = str(e)
+        if "SSL" in err_msg or "EOF" in err_msg or "connection" in err_msg.lower():
+            logger.info("SSL/EOF network glitch detected. Retrying rewrite_text once...")
+            try:
+                rewritten = rewrite_text(doc["gemini_name"], payload.tone)
+                return {"rewritten": rewritten}
+            except Exception as retry_e:
+                handle_exception(retry_e, "rewrite text")
         handle_exception(e, "rewrite text")
 
 @app.post("/api/documents/{doc_id}/chat")
@@ -292,6 +322,8 @@ async def chat_with_document(doc_id: str, payload: ChatPayload, x_client_id: str
             logger.error(f"SSE error: {err_msg}")
             if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
                 friendly_msg = "Rate limit reached (Gemini API). Please wait 15-30 seconds and try again."
+            elif "SSL" in err_msg or "EOF" in err_msg or "connection" in err_msg.lower():
+                friendly_msg = "Temporary network connection issue with the AI. Please try again."
             else:
                 friendly_msg = err_msg
             import json
