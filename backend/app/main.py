@@ -212,6 +212,17 @@ def delete_document(doc_id: str, background_tasks: BackgroundTasks, x_client_id:
     logger.info(f"Document {doc_id} deleted successfully.")
     return {"message": "Document deleted successfully."}
 
+def handle_exception(e: Exception, context: str):
+    err_msg = str(e)
+    if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
+        logger.warning(f"Gemini API Rate limit reached during {context}: {err_msg}")
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit reached (Gemini API). Please wait 15-30 seconds and try again."
+        )
+    logger.error(f"Failed to {context}: {err_msg}")
+    raise HTTPException(status_code=500, detail=err_msg)
+
 @app.post("/api/documents/{doc_id}/summary")
 def get_summary_endpoint(doc_id: str, x_client_id: str = Header(default="anonymous", alias="X-Client-Id")):
     """
@@ -225,8 +236,7 @@ def get_summary_endpoint(doc_id: str, x_client_id: str = Header(default="anonymo
         summary = generate_summary(doc["gemini_name"])
         return {"summary": summary}
     except Exception as e:
-        logger.error(f"Failed to generate summary: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        handle_exception(e, "generate summary")
 
 @app.post("/api/documents/{doc_id}/extract")
 def get_extracted_entities(doc_id: str, x_client_id: str = Header(default="anonymous", alias="X-Client-Id")):
@@ -241,8 +251,7 @@ def get_extracted_entities(doc_id: str, x_client_id: str = Header(default="anony
         entities = extract_entities(doc["gemini_name"])
         return {"entities": entities}
     except Exception as e:
-        logger.error(f"Failed to extract entities: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        handle_exception(e, "extract entities")
 
 @app.post("/api/documents/{doc_id}/rewrite")
 def get_rewritten_text(doc_id: str, payload: RewritePayload, x_client_id: str = Header(default="anonymous", alias="X-Client-Id")):
@@ -257,8 +266,7 @@ def get_rewritten_text(doc_id: str, payload: RewritePayload, x_client_id: str = 
         rewritten = rewrite_text(doc["gemini_name"], payload.tone)
         return {"rewritten": rewritten}
     except Exception as e:
-        logger.error(f"Failed to rewrite text: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        handle_exception(e, "rewrite text")
 
 @app.post("/api/documents/{doc_id}/chat")
 async def chat_with_document(doc_id: str, payload: ChatPayload, x_client_id: str = Header(default="anonymous", alias="X-Client-Id")):
@@ -280,8 +288,14 @@ async def chat_with_document(doc_id: str, payload: ChatPayload, x_client_id: str
             ):
                 yield f"data: {json.dumps({'text': token})}\n\n"
         except Exception as e:
-            logger.error(f"SSE error: {str(e)}")
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            err_msg = str(e)
+            logger.error(f"SSE error: {err_msg}")
+            if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
+                friendly_msg = "Rate limit reached (Gemini API). Please wait 15-30 seconds and try again."
+            else:
+                friendly_msg = err_msg
+            import json
+            yield f"data: {json.dumps({'error': friendly_msg})}\n\n"
             
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
