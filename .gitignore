@@ -1,0 +1,49 @@
+# ==========================================
+# Environments & Credentials (CRITICAL)
+# ==========================================
+.env
+.env.local
+.env.development
+.env.production
+.env.test
+backend/.env
+backend/.env.template (not ignored, but this is a template)
+
+# ==========================================
+# Python Specific
+# ==========================================
+venv/
+.venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+
+# ==========================================
+# Node / Frontend
+# ==========================================
+frontend/node_modules/
+frontend/dist/
+frontend/local.properties
+.eslintcache
+
+# ==========================================
+# Uploaded & Temporary files
+# ==========================================
+backend/uploads/
+backend/temp_uploads/
+temp_uploads/
+uploads/
+
+# ==========================================
+# System Files
+# ==========================================
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
