@@ -100,6 +100,15 @@ const parseMarkdown = (md) => {
   return html.join('\n');
 };
 
+const getClientId = () => {
+  let id = localStorage.getItem('aura_client_id');
+  if (!id) {
+    id = 'usr_' + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+    localStorage.setItem('aura_client_id', id);
+  }
+  return id;
+};
+
 function App() {
   const [documents, setDocuments] = useState([]);
   const [activeDocId, setActiveDocId] = useState(null);
@@ -157,7 +166,11 @@ function App() {
 
   const fetchDocuments = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/documents`);
+      const response = await fetch(`${API_URL}/api/documents`, {
+        headers: {
+          'X-Client-Id': getClientId()
+        }
+      });
       if (response.ok) {
         const data = await response.json();
         setDocuments(data);
@@ -172,7 +185,11 @@ function App() {
 
   const fetchDocDetails = async (id) => {
     try {
-      const response = await fetch(`${API_URL}/api/documents/${id}`);
+      const response = await fetch(`${API_URL}/api/documents/${id}`, {
+        headers: {
+          'X-Client-Id': getClientId()
+        }
+      });
       if (response.ok) {
         const data = await response.json();
         setActiveDoc(data);
@@ -194,6 +211,9 @@ function App() {
     try {
       const response = await fetch(`${API_URL}/api/upload`, {
         method: 'POST',
+        headers: {
+          'X-Client-Id': getClientId()
+        },
         body: formData,
       });
       
@@ -237,6 +257,9 @@ function App() {
     try {
       const response = await fetch(`${API_URL}/api/documents/${id}`, {
         method: 'DELETE',
+        headers: {
+          'X-Client-Id': getClientId()
+        }
       });
       if (response.ok) {
         setDocuments(prev => prev.filter(doc => doc.id !== id));
@@ -267,6 +290,9 @@ function App() {
     try {
       const response = await fetch(`${API_URL}/api/documents/${docId}/summary`, {
         method: 'POST',
+        headers: {
+          'X-Client-Id': getClientId()
+        }
       });
       if (!response.ok) {
         const errorData = await response.json();
@@ -292,6 +318,9 @@ function App() {
     try {
       const response = await fetch(`${API_URL}/api/documents/${docId}/extract`, {
         method: 'POST',
+        headers: {
+          'X-Client-Id': getClientId()
+        }
       });
       if (!response.ok) {
         const errorData = await response.json();
@@ -317,7 +346,10 @@ function App() {
     try {
       const response = await fetch(`${API_URL}/api/documents/${docId}/rewrite`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'X-Client-Id': getClientId()
+        },
         body: JSON.stringify({ tone }),
       });
       if (!response.ok) {
@@ -367,7 +399,10 @@ function App() {
     try {
       const response = await fetch(`${API_URL}/api/documents/${activeDocId}/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'X-Client-Id': getClientId()
+        },
         body: JSON.stringify({
           chat_history: docHistory, // Send previous turns
           user_message: currentMessage,

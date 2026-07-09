@@ -41,9 +41,13 @@ temp_uploads/
 uploads/
 
 # ==========================================
-# System Files
+# System & Database Files
 # ==========================================
 .DS_Store
 Thumbs.db
 ehthumbs.db
+ehthumbs_vista.db
 Desktop.ini
+*.db
+app.db
+db.sqlite3

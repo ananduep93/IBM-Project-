@@ -2,8 +2,8 @@ import os
 import shutil
 import uuid
 import logging
-from typing import List, Dict, Any
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
+from typing import List, Dict, Any, Generator
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -27,8 +27,13 @@ from app.services.llm_service import (
     rewrite_text,
     stream_chat
 )
+from app.db import init_db, add_document, get_documents, get_document, delete_document_record
 
 app = FastAPI(title="Document Analyzer API", version="1.0.0")
+
+@app.on_event("startup")
+def on_startup():
+    init_db()
 
 # Setup CORS
 app.add_middleware(
@@ -43,9 +48,6 @@ app.add_middleware(
 UPLOADS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../uploads"))
 os.makedirs(UPLOADS_DIR, exist_ok=True)
 
-# In-memory document storage (acts as database)
-document_db: Dict[str, Dict[str, Any]] = {}
-
 class ChatHistoryItem(BaseModel):
     role: str
     content: str
@@ -58,13 +60,16 @@ class RewritePayload(BaseModel):
     tone: str
 
 @app.post("/api/upload")
-async def upload_document(file: UploadFile = File(...)):
+async def upload_document(
+    file: UploadFile = File(...),
+    x_client_id: str = Header(default="anonymous", alias="X-Client-Id")
+):
     """
     Endpoint to upload a PDF or TXT document.
     Saves it locally in a persistent uploads/ directory, extracts digital text if available,
     and uploads it to the Gemini Files API.
     """
-    logger.info(f"Received file upload request: {file.filename}")
+    logger.info(f"Received file upload request from client {x_client_id}: {file.filename}")
     
     # Check extension
     ext = os.path.splitext(file.filename)[1].lower()
@@ -117,113 +122,102 @@ async def upload_document(file: UploadFile = File(...)):
             os.remove(persistent_file_path)
         raise HTTPException(status_code=500, detail=f"Gemini integration failed: {str(e)}")
         
-    # Store metadata in DB
-    doc_metadata = {
-        "id": doc_id,
-        "filename": file.filename,
-        "mime_type": mime_type,
-        "gemini_name": gemini_name,
-        "local_text": local_text,
-        "is_scanned": is_scanned,
-        "file_path": persistent_file_path,
-        "size": file.size or os.path.getsize(persistent_file_path) if os.path.exists(persistent_file_path) else 0,
-        "uploaded_at": 0.0
-    }
-    # Fix uploaded_at timestamp
-    import time as pytime
-    doc_metadata["uploaded_at"] = pytime.time()
-    
-    document_db[doc_id] = doc_metadata
-    logger.info(f"Document registered successfully: {doc_id}")
+    # Store metadata in DB (SQLite)
+    size = file.size or os.path.getsize(persistent_file_path) if os.path.exists(persistent_file_path) else 0
+    try:
+        doc = add_document(
+            doc_id=doc_id,
+            client_id=x_client_id,
+            filename=file.filename,
+            mime_type=mime_type,
+            gemini_name=gemini_name,
+            size=size
+        )
+        logger.info(f"Document registered successfully in SQLite: {doc_id}")
+    except Exception as e:
+        logger.error(f"Failed to write metadata to SQLite: {str(e)}")
+        # Cleanup local file on DB write failure
+        if os.path.exists(persistent_file_path):
+            os.remove(persistent_file_path)
+        raise HTTPException(status_code=500, detail=f"Database registration failed: {str(e)}")
     
     return {
-        "id": doc_id,
-        "filename": doc_metadata["filename"],
-        "mime_type": doc_metadata["mime_type"],
-        "is_scanned": doc_metadata["is_scanned"],
-        "size": doc_metadata["size"],
-        "text_preview": doc_metadata["local_text"][:2000] # Provide snippet
+        "id": doc["id"],
+        "filename": doc["filename"],
+        "mime_type": doc["mime_type"],
+        "is_scanned": is_scanned,
+        "size": doc["size"],
+        "text_preview": local_text[:2000] # Provide snippet
     }
 
 @app.get("/api/documents")
-def list_documents():
+def list_documents(x_client_id: str = Header(default="anonymous", alias="X-Client-Id")):
     """
-    List all uploaded documents (metadata only).
+    List all uploaded documents (metadata only) for the active client.
     """
-    return [
-        {
-            "id": doc["id"],
-            "filename": doc["filename"],
-            "mime_type": doc["mime_type"],
-            "is_scanned": doc["is_scanned"],
-            "size": doc["size"],
-            "uploaded_at": doc["uploaded_at"]
-        }
-        for doc in document_db.values()
-    ]
+    return get_documents(x_client_id)
 
 @app.get("/api/documents/{doc_id}")
-def get_document(doc_id: str):
+def get_document_endpoint(doc_id: str, x_client_id: str = Header(default="anonymous", alias="X-Client-Id")):
     """
     Get detailed document preview content.
     """
-    doc = document_db.get(doc_id)
+    doc = get_document(doc_id, x_client_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     return {
         "id": doc["id"],
         "filename": doc["filename"],
         "mime_type": doc["mime_type"],
-        "is_scanned": doc["is_scanned"],
         "size": doc["size"],
-        "text": doc["local_text"]
+        "text": ""  # digital text preview omitted (not needed by current UI)
     }
 
 @app.get("/api/documents/{doc_id}/file")
-def get_document_file(doc_id: str):
+def get_document_file(doc_id: str, x_client_id: str = Header(default="anonymous", alias="X-Client-Id")):
     """
     Get the original uploaded PDF or TXT file.
     """
-    doc = document_db.get(doc_id)
+    doc = get_document(doc_id, x_client_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
-    file_path = doc.get("file_path")
-    if not file_path or not os.path.exists(file_path):
+    ext = ".pdf" if doc["mime_type"] == "application/pdf" else ".txt"
+    file_path = os.path.join(UPLOADS_DIR, f"{doc_id}{ext}")
+    if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Original file not found on server")
     return FileResponse(file_path, media_type=doc["mime_type"], filename=doc["filename"])
 
 @app.delete("/api/documents/{doc_id}")
-def delete_document(doc_id: str, background_tasks: BackgroundTasks):
+def delete_document(doc_id: str, background_tasks: BackgroundTasks, x_client_id: str = Header(default="anonymous", alias="X-Client-Id")):
     """
-    Delete a document from the local store and Gemini Files API.
+    Delete a document from the SQLite database and Gemini Files API.
     """
-    doc = document_db.get(doc_id)
-    if not doc:
+    gemini_name = delete_document_record(doc_id, x_client_id)
+    if not gemini_name:
         raise HTTPException(status_code=404, detail="Document not found")
     
     # Add deletion to background tasks to keep API response quick
-    background_tasks.add_task(delete_file_from_gemini, doc["gemini_name"])
+    background_tasks.add_task(delete_file_from_gemini, gemini_name)
     
-    # Delete local file
-    file_path = doc.get("file_path")
-    if file_path and os.path.exists(file_path):
-        try:
-            os.remove(file_path)
-            logger.info(f"Local file {file_path} deleted.")
-        except Exception as e:
-            logger.warning(f"Failed to delete local file {file_path}: {str(e)}")
-            
-    # Remove from memory
-    del document_db[doc_id]
-    logger.info(f"Document {doc_id} deleted.")
+    # Delete local file if it exists
+    for ext in [".pdf", ".txt"]:
+        file_path = os.path.join(UPLOADS_DIR, f"{doc_id}{ext}")
+        if os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+                logger.info(f"Local file {file_path} deleted.")
+            except Exception as e:
+                logger.warning(f"Failed to delete local file {file_path}: {str(e)}")
+                
+    logger.info(f"Document {doc_id} deleted successfully.")
     return {"message": "Document deleted successfully."}
 
 @app.post("/api/documents/{doc_id}/summary")
-def get_summary(doc_id: str):
+def get_summary_endpoint(doc_id: str, x_client_id: str = Header(default="anonymous", alias="X-Client-Id")):
     """
     Get the AI-generated structured summary.
     """
-    doc = document_db.get(doc_id)
+    doc = get_document(doc_id, x_client_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     
@@ -235,11 +229,11 @@ def get_summary(doc_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/documents/{doc_id}/extract")
-def get_extracted_entities(doc_id: str):
+def get_extracted_entities(doc_id: str, x_client_id: str = Header(default="anonymous", alias="X-Client-Id")):
     """
     Get the AI-extracted entities.
     """
-    doc = document_db.get(doc_id)
+    doc = get_document(doc_id, x_client_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     
@@ -251,11 +245,11 @@ def get_extracted_entities(doc_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/documents/{doc_id}/rewrite")
-def get_rewritten_text(doc_id: str, payload: RewritePayload):
+def get_rewritten_text(doc_id: str, payload: RewritePayload, x_client_id: str = Header(default="anonymous", alias="X-Client-Id")):
     """
     Get the AI-rewritten text in a specified tone.
     """
-    doc = document_db.get(doc_id)
+    doc = get_document(doc_id, x_client_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     
@@ -267,11 +261,11 @@ def get_rewritten_text(doc_id: str, payload: RewritePayload):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/documents/{doc_id}/chat")
-async def chat_with_document(doc_id: str, payload: ChatPayload):
+async def chat_with_document(doc_id: str, payload: ChatPayload, x_client_id: str = Header(default="anonymous", alias="X-Client-Id")):
     """
     SSE stream endpoint for chat dialogue about the document.
     """
-    doc = document_db.get(doc_id)
+    doc = get_document(doc_id, x_client_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     
