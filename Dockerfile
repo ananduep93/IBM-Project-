@@ -1,22 +1,3 @@
-# ==========================================
-# Stage 1: Build the React Frontend
-# ==========================================
-FROM node:20-alpine AS frontend-builder
-WORKDIR /frontend
-
-# Copy frontend package list and lockfile
-COPY frontend/package*.json ./
-RUN npm ci
-
-# Copy frontend source files
-COPY frontend/ ./
-
-# Build frontend static files (generates /frontend/dist)
-RUN npm run build
-
-# ==========================================
-# Stage 2: Build the FastAPI Backend & Serve
-# ==========================================
 FROM python:3.12-slim AS backend-runner
 WORKDIR /app/backend
 
@@ -32,10 +13,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy backend files
 COPY backend/ ./
 
-# Copy compiled frontend from Stage 1 to match the relative paths
-COPY --from=frontend-builder /frontend/dist /app/frontend/dist
+# Copy compiled frontend directly from the source bundle (pre-built locally)
+COPY frontend/dist /app/frontend/dist
 
-# Expose port 80 for App Runner / Elastic Beanstalk
+# Expose port 80 for Elastic Beanstalk
 EXPOSE 80
 
 # Environment variables
