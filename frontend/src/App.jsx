@@ -146,14 +146,10 @@ function App() {
     fetchDocuments();
   }, []);
 
-  // Fetch detailed document content and trigger analysis on selection change
+  // Fetch detailed document content on selection change
   useEffect(() => {
     if (activeDocId) {
       fetchDocDetails(activeDocId);
-      // Automatically generate summary if not cached
-      if (!cache[activeDocId]?.summary) {
-        triggerSummary(activeDocId);
-      }
     } else {
       setActiveDoc(null);
     }
@@ -683,8 +679,32 @@ function App() {
                       </div>
                     </div>
                   ) : (
-                    <div className="loader-container">
-                      <span className="loading-text">Waiting for summary...</span>
+                    <div className="analysis-trigger-container" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '20px', padding: '60px 20px', textAlign: 'center', margin: 'auto' }}>
+                      <div style={{ fontSize: '3rem', animation: 'float 3s ease-in-out infinite' }}>✨</div>
+                      <h3 style={{ fontFamily: 'Outfit, sans-serif', fontWeight: 600, color: 'var(--text-primary)', margin: 0 }}>Document Ready for Analysis</h3>
+                      <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', maxWidth: '320px', margin: 0 }}>
+                        Click below to run layout parsing, key date detection, and generate an executive summary.
+                      </p>
+                      <button 
+                        className="primary-action-btn"
+                        onClick={() => triggerSummary(activeDocId)}
+                        style={{
+                          background: 'linear-gradient(135deg, var(--accent-cyan) 0%, var(--accent-blue) 100%)',
+                          color: 'var(--text-primary)',
+                          border: 'none',
+                          padding: '12px 28px',
+                          fontFamily: 'Outfit, sans-serif',
+                          fontWeight: 600,
+                          borderRadius: 'var(--border-radius-lg)',
+                          cursor: 'pointer',
+                          boxShadow: '0 4px 20px rgba(0, 242, 254, 0.25)',
+                          transition: 'transform 0.2s, box-shadow 0.2s',
+                        }}
+                        onMouseOver={(e) => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 6px 24px rgba(0, 242, 254, 0.35)'; }}
+                        onMouseOut={(e) => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = '0 4px 20px rgba(0, 242, 254, 0.25)'; }}
+                      >
+                        Summarize Document
+                      </button>
                     </div>
                   )
                 )}
