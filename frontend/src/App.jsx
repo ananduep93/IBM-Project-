@@ -136,6 +136,18 @@ function App() {
   
   const fileInputRef = useRef(null);
   const chatBottomRef = useRef(null);
+  const activeAnalysisControllerRef = useRef(null);
+
+  const cancelActiveAnalysis = () => {
+    if (activeAnalysisControllerRef.current) {
+      activeAnalysisControllerRef.current.abort();
+      activeAnalysisControllerRef.current = null;
+    }
+    setLoadingSummary(false);
+    setLoadingEntities(false);
+    setLoadingRewrite(false);
+    setIsStreamingChat(false);
+  };
 
   const toggleSidebar = () => {
     setIsSidebarOpen(prev => !prev);
@@ -282,13 +294,17 @@ function App() {
 
   // LLM Query Triggers
   const triggerSummary = async (docId) => {
+    cancelActiveAnalysis();
+    const controller = new AbortController();
+    activeAnalysisControllerRef.current = controller;
     setLoadingSummary(true);
     try {
       const response = await fetch(`${API_URL}/api/documents/${docId}/summary`, {
         method: 'POST',
         headers: {
           'X-Client-Id': getClientId()
-        }
+        },
+        signal: controller.signal
       });
       if (!response.ok) {
         const errorData = await response.json();
@@ -303,20 +319,31 @@ function App() {
         },
       }));
     } catch (err) {
+      if (err.name === 'AbortError') {
+        console.log('Summary generation aborted.');
+        return;
+      }
       alert(`Summary Error: ${err.message}`);
     } finally {
+      if (activeAnalysisControllerRef.current === controller) {
+        activeAnalysisControllerRef.current = null;
+      }
       setLoadingSummary(false);
     }
   };
 
   const triggerEntities = async (docId) => {
+    cancelActiveAnalysis();
+    const controller = new AbortController();
+    activeAnalysisControllerRef.current = controller;
     setLoadingEntities(true);
     try {
       const response = await fetch(`${API_URL}/api/documents/${docId}/extract`, {
         method: 'POST',
         headers: {
           'X-Client-Id': getClientId()
-        }
+        },
+        signal: controller.signal
       });
       if (!response.ok) {
         const errorData = await response.json();
@@ -331,13 +358,23 @@ function App() {
         },
       }));
     } catch (err) {
+      if (err.name === 'AbortError') {
+        console.log('Entity extraction aborted.');
+        return;
+      }
       alert(`Entities Error: ${err.message}`);
     } finally {
+      if (activeAnalysisControllerRef.current === controller) {
+        activeAnalysisControllerRef.current = null;
+      }
       setLoadingEntities(false);
     }
   };
 
   const triggerRewrite = async (docId, tone) => {
+    cancelActiveAnalysis();
+    const controller = new AbortController();
+    activeAnalysisControllerRef.current = controller;
     setLoadingRewrite(true);
     try {
       const response = await fetch(`${API_URL}/api/documents/${docId}/rewrite`, {
@@ -347,6 +384,7 @@ function App() {
           'X-Client-Id': getClientId()
         },
         body: JSON.stringify({ tone }),
+        signal: controller.signal
       });
       if (!response.ok) {
         const errorData = await response.json();
@@ -368,8 +406,15 @@ function App() {
         };
       });
     } catch (err) {
+      if (err.name === 'AbortError') {
+        console.log('Rewrite aborted.');
+        return;
+      }
       alert(`Rewrite Error: ${err.message}`);
     } finally {
+      if (activeAnalysisControllerRef.current === controller) {
+        activeAnalysisControllerRef.current = null;
+      }
       setLoadingRewrite(false);
     }
   };
@@ -378,6 +423,10 @@ function App() {
   const handleSendChatMessage = async (e) => {
     e.preventDefault();
     if (!userMessage.trim() || isStreamingChat || !activeDocId) return;
+
+    cancelActiveAnalysis();
+    const controller = new AbortController();
+    activeAnalysisControllerRef.current = controller;
 
     const currentMessage = userMessage;
     setUserMessage('');
@@ -403,6 +452,7 @@ function App() {
           chat_history: docHistory, // Send previous turns
           user_message: currentMessage,
         }),
+        signal: controller.signal
       });
 
       if (!response.ok) {
@@ -468,6 +518,18 @@ function App() {
         }
       }
     } catch (err) {
+      if (err.name === 'AbortError') {
+        console.log('Chat response aborted.');
+        // Clean up the trailing empty assistant message
+        setChatMessages(prev => {
+          const currentList = [...prev[activeDocId]];
+          if (currentList.length > 0 && currentList[currentList.length - 1].content === '') {
+            currentList.pop();
+          }
+          return { ...prev, [activeDocId]: currentList };
+        });
+        return;
+      }
       setChatMessages(prev => ({
         ...prev,
         [activeDocId]: [
@@ -476,6 +538,9 @@ function App() {
         ],
       }));
     } finally {
+      if (activeAnalysisControllerRef.current === controller) {
+        activeAnalysisControllerRef.current = null;
+      }
       setIsStreamingChat(false);
     }
   };
@@ -623,8 +688,17 @@ function App() {
 
         {activeDocId ? (
           <main className="main-workspace">
-            {/* AI Analysis Hub (Full Width Workspace) */}
-            <section className="analysis-hub" style={{ flex: 1 }}>
+            {/* LEFT PANEL: Document Preview */}
+            <div className="pdf-viewer-panel">
+              <iframe 
+                className="pdf-iframe"
+                src={`${API_URL}/api/documents/${activeDocId}/file`}
+                title="Document Preview"
+              />
+            </div>
+
+            {/* RIGHT PANEL: AI Analysis Hub */}
+            <section className="analysis-hub">
               <div className="panel-header">
                 <span className="panel-title" style={{ fontFamily: 'Outfit, sans-serif', fontWeight: 600, fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
                   📄 {activeDoc?.filename || 'Loading Document...'}
@@ -667,6 +741,7 @@ function App() {
                     <div className="loader-container">
                       <div className="spinner"></div>
                       <span className="loading-text">Analyzing structure and generating summary...</span>
+                      <button className="cancel-analysis-btn" onClick={cancelActiveAnalysis}>Cancel Analysis</button>
                     </div>
                   ) : cache[activeDocId]?.summary ? (
                     <div className="summary-container">
@@ -760,6 +835,7 @@ function App() {
                     <div className="loader-container">
                       <div className="spinner"></div>
                       <span className="loading-text">Scanning document for names, dates, financials, and actions...</span>
+                      <button className="cancel-analysis-btn" onClick={cancelActiveAnalysis}>Cancel Analysis</button>
                     </div>
                   ) : cache[activeDocId]?.entities ? (
                     <div 
@@ -795,6 +871,7 @@ function App() {
                       <div className="loader-container">
                         <div className="spinner"></div>
                         <span className="loading-text">Translating content into {selectedTone} tone...</span>
+                        <button className="cancel-analysis-btn" onClick={cancelActiveAnalysis}>Cancel Analysis</button>
                       </div>
                     ) : cache[activeDocId]?.rewrite?.[selectedTone] ? (
                       <div className="summary-card">
