@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import './App.css';
 
-// Dynamic API URL for development and production
-const API_URL = import.meta.env.DEV ? 'http://localhost:8000' : '';
+// Dynamic API URL for development and production (proxied in dev)
+const API_URL = '';
 
 // Helper to format bytes
 const formatBytes = (bytes, decimals = 2) => {
