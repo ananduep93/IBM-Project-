@@ -692,7 +692,7 @@ function App() {
             <div className="pdf-viewer-panel">
               <iframe 
                 className="pdf-iframe"
-                src={`${API_URL}/api/documents/${activeDocId}/file`}
+                src={`${API_URL}/api/documents/${activeDocId}/file?client_id=${getClientId()}`}
                 title="Document Preview"
               />
             </div>

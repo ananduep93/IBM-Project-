@@ -3,7 +3,7 @@ import shutil
 import uuid
 import logging
 from typing import List, Dict, Any, Generator
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Header
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -174,11 +174,16 @@ def get_document_endpoint(doc_id: str, x_client_id: str = Header(default="anonym
     }
 
 @app.get("/api/documents/{doc_id}/file")
-def get_document_file(doc_id: str, x_client_id: str = Header(default="anonymous", alias="X-Client-Id")):
+def get_document_file(
+    doc_id: str,
+    client_id: str = Query(None),
+    x_client_id: str = Header(default="anonymous", alias="X-Client-Id")
+):
     """
     Get the original uploaded PDF or TXT file.
     """
-    doc = get_document(doc_id, x_client_id)
+    effective_client_id = client_id if (x_client_id == "anonymous" and client_id) else x_client_id
+    doc = get_document(doc_id, effective_client_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     ext = ".pdf" if doc["mime_type"] == "application/pdf" else ".txt"
