@@ -22,6 +22,64 @@ def get_client(custom_api_key: str = None) -> genai.Client:
         _client = genai.Client(api_key=api_key)
     return _client
 
+MODEL_FALLBACKS = [
+    'gemini-2.5-flash',
+    'gemini-2.0-flash',
+    'gemini-2.0-flash-lite',
+    'gemini-1.5-flash'
+]
+
+def generate_content_with_fallback(client: genai.Client, contents: Any, config: Any = None) -> Any:
+    last_error = None
+    for model_name in MODEL_FALLBACKS:
+        try:
+            logger.info(f"Attempting generation with model: {model_name}...")
+            response = client.models.generate_content(
+                model=model_name,
+                contents=contents,
+                config=config
+            )
+            logger.info(f"Generation successful using model: {model_name}")
+            return response
+        except Exception as e:
+            err_str = str(e)
+            logger.warning(f"Model {model_name} generation failed: {err_str}")
+            last_error = e
+            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "rate limit" in err_str.lower() or "overloaded" in err_str.lower():
+                logger.info(f"Retrying with next fallback model...")
+                continue
+            else:
+                raise e
+    raise last_error
+
+def generate_content_stream_with_fallback(client: genai.Client, contents: Any, config: Any = None) -> Generator[Any, None, None]:
+    last_error = None
+    for model_name in MODEL_FALLBACKS:
+        try:
+            logger.info(f"Attempting stream with model: {model_name}...")
+            response_stream = client.models.generate_content_stream(
+                model=model_name,
+                contents=contents,
+                config=config
+            )
+            iterator = iter(response_stream)
+            first_chunk = next(iterator, None)
+            if first_chunk:
+                yield first_chunk
+            for chunk in iterator:
+                yield chunk
+            return
+        except Exception as e:
+            err_str = str(e)
+            logger.warning(f"Model {model_name} stream failed: {err_str}")
+            last_error = e
+            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "rate limit" in err_str.lower() or "overloaded" in err_str.lower():
+                logger.info(f"Retrying stream with next fallback model...")
+                continue
+            else:
+                raise e
+    raise last_error
+
 def upload_file_to_gemini(file_path: str, mime_type: str, custom_api_key: str = None) -> Any:
     client = get_client(custom_api_key)
     logger.info(f"Uploading file {file_path} (MIME: {mime_type}) to Gemini Files API...")
@@ -96,8 +154,8 @@ Rules:
 - Return ONLY the JSON object, absolutely nothing else"""
 
     logger.info(f"Generating full analysis for {file_name}...")
-    response = client.models.generate_content(
-        model='gemini-2.5-flash',
+    response = generate_content_with_fallback(
+        client=client,
         contents=[file_part, types.Part.from_text(text=prompt)],
         config=types.GenerateContentConfig(
             response_mime_type="application/json",
@@ -129,8 +187,8 @@ def generate_summary(file_name: str, custom_api_key: str = None) -> str:
         "Format the output using clear markdown headers and lists."
     ))
     logger.info(f"Generating summary for {file_name}...")
-    response = client.models.generate_content(
-        model='gemini-2.5-flash',
+    response = generate_content_with_fallback(
+        client=client,
         contents=[file_part, prompt_part],
         config=types.GenerateContentConfig(
             max_output_tokens=4096,
@@ -152,8 +210,8 @@ def extract_entities(file_name: str, custom_api_key: str = None) -> str:
         "Format the output as a clean markdown table for each category with two columns: 'Entity/Value' and 'Context/Description'."
     ))
     logger.info(f"Extracting entities for {file_name}...")
-    response = client.models.generate_content(
-        model='gemini-2.5-flash',
+    response = generate_content_with_fallback(
+        client=client,
         contents=[file_part, prompt_part],
         config=types.GenerateContentConfig(
             max_output_tokens=4096,
@@ -171,8 +229,8 @@ def rewrite_text(file_name: str, tone: str, custom_api_key: str = None) -> str:
         "to match the requested tone. Provide a brief explanation of the style changes made at the end."
     ))
     logger.info(f"Rewriting {file_name} in tone '{tone}'...")
-    response = client.models.generate_content(
-        model='gemini-2.5-flash',
+    response = generate_content_with_fallback(
+        client=client,
         contents=[file_part, prompt_part],
         config=types.GenerateContentConfig(
             max_output_tokens=8192,
@@ -201,8 +259,8 @@ def stream_chat(file_name: str, chat_history: List[Dict[str, str]], user_message
         mapped_history.append(types.Content(role='user', parts=[user_text_part]))
     logger.info(f"Streaming chat session for {file_name}...")
     try:
-        response_stream = client.models.generate_content_stream(
-            model='gemini-2.5-flash',
+        response_stream = generate_content_stream_with_fallback(
+            client=client,
             contents=mapped_history,
             config=types.GenerateContentConfig(
                 max_output_tokens=4096,
