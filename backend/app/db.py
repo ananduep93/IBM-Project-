@@ -35,6 +35,27 @@ def init_db():
     """)
     # Add index on client_id for fast lookups
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_client_id ON documents(client_id)")
+    
+    # Check and add new columns if they do not exist
+    cursor.execute("PRAGMA table_info(documents)")
+    columns = [row[1] for row in cursor.fetchall()]
+    
+    if "summary" not in columns:
+        cursor.execute("ALTER TABLE documents ADD COLUMN summary TEXT")
+        logger.info("Added 'summary' column to documents table.")
+    if "entities" not in columns:
+        cursor.execute("ALTER TABLE documents ADD COLUMN entities TEXT")
+        logger.info("Added 'entities' column to documents table.")
+    if "rewrite" not in columns:
+        cursor.execute("ALTER TABLE documents ADD COLUMN rewrite TEXT")
+        logger.info("Added 'rewrite' column to documents table.")
+    if "chat_history" not in columns:
+        cursor.execute("ALTER TABLE documents ADD COLUMN chat_history TEXT")
+        logger.info("Added 'chat_history' column to documents table.")
+    if "full_analysis" not in columns:
+        cursor.execute("ALTER TABLE documents ADD COLUMN full_analysis TEXT")
+        logger.info("Added 'full_analysis' column to documents table.")
+        
     conn.commit()
     conn.close()
 
@@ -86,7 +107,7 @@ def get_document(doc_id: str, client_id: str) -> dict:
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT id, filename, mime_type, gemini_name, size, uploaded_at 
+        SELECT id, filename, mime_type, gemini_name, size, uploaded_at, summary, entities, rewrite, chat_history, full_analysis
         FROM documents 
         WHERE id = ? AND client_id = ?
     """, (doc_id, client_id))
@@ -96,6 +117,16 @@ def get_document(doc_id: str, client_id: str) -> dict:
     if row:
         return dict(row)
     return None
+
+def update_document_field(doc_id: str, client_id: str, field_name: str, value: str):
+    """
+    Updates a specific field of a document record.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(f"UPDATE documents SET {field_name} = ? WHERE id = ? AND client_id = ?", (value, doc_id, client_id))
+    conn.commit()
+    conn.close()
 
 def delete_document_record(doc_id: str, client_id: str) -> str:
     """

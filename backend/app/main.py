@@ -22,12 +22,13 @@ from app.services.pdf_parser import extract_text_from_pdf
 from app.services.llm_service import (
     upload_file_to_gemini,
     delete_file_from_gemini,
+    generate_full_analysis,
     generate_summary,
     extract_entities,
     rewrite_text,
     stream_chat
 )
-from app.db import init_db, add_document, get_documents, get_document, delete_document_record
+from app.db import init_db, add_document, get_documents, get_document, delete_document_record, update_document_field
 
 app = FastAPI(title="Document Analyzer API", version="1.0.0")
 
@@ -62,7 +63,8 @@ class RewritePayload(BaseModel):
 @app.post("/api/upload")
 async def upload_document(
     file: UploadFile = File(...),
-    x_client_id: str = Header(default="anonymous", alias="X-Client-Id")
+    x_client_id: str = Header(default="anonymous", alias="X-Client-Id"),
+    x_gemini_key: str = Header(default=None, alias="X-Gemini-Key")
 ):
     """
     Endpoint to upload a PDF or TXT document.
@@ -113,7 +115,7 @@ async def upload_document(
             
     # Upload to Gemini Files API (multimodal analysis)
     try:
-        gemini_ref = upload_file_to_gemini(persistent_file_path, mime_type)
+        gemini_ref = upload_file_to_gemini(persistent_file_path, mime_type, custom_api_key=x_gemini_key)
         gemini_name = gemini_ref.name
     except Exception as e:
         logger.error(f"Gemini API upload failed: {str(e)}")
@@ -165,12 +167,31 @@ def get_document_endpoint(doc_id: str, x_client_id: str = Header(default="anonym
     doc = get_document(doc_id, x_client_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+        
+    import json
+    rewrite_data = {}
+    if doc.get("rewrite"):
+        try:
+            rewrite_data = json.loads(doc["rewrite"])
+        except Exception:
+            pass
+            
+    chat_data = []
+    if doc.get("chat_history"):
+        try:
+            chat_data = json.loads(doc["chat_history"])
+        except Exception:
+            pass
+
     return {
         "id": doc["id"],
         "filename": doc["filename"],
         "mime_type": doc["mime_type"],
         "size": doc["size"],
-        "text": ""  # digital text preview omitted (not needed by current UI)
+        "summary": doc.get("summary"),
+        "entities": doc.get("entities"),
+        "rewrite": rewrite_data,
+        "chat_history": chat_data
     }
 
 @app.get("/api/documents/{doc_id}/file")
@@ -193,7 +214,12 @@ def get_document_file(
     return FileResponse(file_path, media_type=doc["mime_type"], filename=doc["filename"])
 
 @app.delete("/api/documents/{doc_id}")
-def delete_document(doc_id: str, background_tasks: BackgroundTasks, x_client_id: str = Header(default="anonymous", alias="X-Client-Id")):
+def delete_document(
+    doc_id: str,
+    background_tasks: BackgroundTasks,
+    x_client_id: str = Header(default="anonymous", alias="X-Client-Id"),
+    x_gemini_key: str = Header(default=None, alias="X-Gemini-Key")
+):
     """
     Delete a document from the SQLite database and Gemini Files API.
     """
@@ -202,7 +228,7 @@ def delete_document(doc_id: str, background_tasks: BackgroundTasks, x_client_id:
         raise HTTPException(status_code=404, detail="Document not found")
     
     # Add deletion to background tasks to keep API response quick
-    background_tasks.add_task(delete_file_from_gemini, gemini_name)
+    background_tasks.add_task(delete_file_from_gemini, gemini_name, x_gemini_key)
     
     # Delete local file if it exists
     for ext in [".pdf", ".txt"]:
@@ -231,11 +257,59 @@ def handle_exception(e: Exception, context: str):
             status_code=503,
             detail="Temporary network connection issue with the AI. Please try again in a moment."
         )
+    elif "403" in err_msg or "PermissionDenied" in err_msg or "permission" in err_msg.lower() or "not_found" in err_msg.lower():
+        logger.warning(f"Gemini API permission/scope error during {context}: {err_msg}")
+        raise HTTPException(
+            status_code=403,
+            detail="Access Denied: This document was uploaded under a different API Key. Please re-upload the file to analyze or chat under your new key."
+        )
     logger.error(f"Failed to {context}: {err_msg}")
     raise HTTPException(status_code=500, detail=err_msg)
 
+@app.post("/api/documents/{doc_id}/analyze")
+def analyze_document_endpoint(
+    doc_id: str,
+    x_client_id: str = Header(default="anonymous", alias="X-Client-Id"),
+    x_gemini_key: str = Header(default=None, alias="X-Gemini-Key")
+):
+    """
+    Run full structured AI analysis and persist result in SQLite.
+    Returns comprehensive JSON for the dashboard.
+    """
+    import json
+    doc = get_document(doc_id, x_client_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    # Return cached analysis if it exists
+    if doc.get("full_analysis"):
+        try:
+            return json.loads(doc["full_analysis"])
+        except Exception:
+            pass
+
+    try:
+        analysis = generate_full_analysis(doc["gemini_name"], custom_api_key=x_gemini_key)
+        update_document_field(doc_id, x_client_id, "full_analysis", json.dumps(analysis))
+        return analysis
+    except Exception as e:
+        err_msg = str(e)
+        if "SSL" in err_msg or "EOF" in err_msg or "connection" in err_msg.lower():
+            logger.info("SSL/EOF glitch. Retrying generate_full_analysis once...")
+            try:
+                analysis = generate_full_analysis(doc["gemini_name"], custom_api_key=x_gemini_key)
+                update_document_field(doc_id, x_client_id, "full_analysis", json.dumps(analysis))
+                return analysis
+            except Exception as retry_e:
+                handle_exception(retry_e, "full analysis")
+        handle_exception(e, "full analysis")
+
 @app.post("/api/documents/{doc_id}/summary")
-def get_summary_endpoint(doc_id: str, x_client_id: str = Header(default="anonymous", alias="X-Client-Id")):
+def get_summary_endpoint(
+    doc_id: str,
+    x_client_id: str = Header(default="anonymous", alias="X-Client-Id"),
+    x_gemini_key: str = Header(default=None, alias="X-Gemini-Key")
+):
     """
     Get the AI-generated structured summary.
     """
@@ -244,21 +318,27 @@ def get_summary_endpoint(doc_id: str, x_client_id: str = Header(default="anonymo
         raise HTTPException(status_code=404, detail="Document not found")
     
     try:
-        summary = generate_summary(doc["gemini_name"])
+        summary = generate_summary(doc["gemini_name"], custom_api_key=x_gemini_key)
+        update_document_field(doc_id, x_client_id, "summary", summary)
         return {"summary": summary}
     except Exception as e:
         err_msg = str(e)
         if "SSL" in err_msg or "EOF" in err_msg or "connection" in err_msg.lower():
             logger.info("SSL/EOF network glitch detected. Retrying generate_summary once...")
             try:
-                summary = generate_summary(doc["gemini_name"])
+                summary = generate_summary(doc["gemini_name"], custom_api_key=x_gemini_key)
+                update_document_field(doc_id, x_client_id, "summary", summary)
                 return {"summary": summary}
             except Exception as retry_e:
                 handle_exception(retry_e, "generate summary")
         handle_exception(e, "generate summary")
 
 @app.post("/api/documents/{doc_id}/extract")
-def get_extracted_entities(doc_id: str, x_client_id: str = Header(default="anonymous", alias="X-Client-Id")):
+def get_extracted_entities(
+    doc_id: str,
+    x_client_id: str = Header(default="anonymous", alias="X-Client-Id"),
+    x_gemini_key: str = Header(default=None, alias="X-Gemini-Key")
+):
     """
     Get the AI-extracted entities.
     """
@@ -267,21 +347,28 @@ def get_extracted_entities(doc_id: str, x_client_id: str = Header(default="anony
         raise HTTPException(status_code=404, detail="Document not found")
     
     try:
-        entities = extract_entities(doc["gemini_name"])
+        entities = extract_entities(doc["gemini_name"], custom_api_key=x_gemini_key)
+        update_document_field(doc_id, x_client_id, "entities", entities)
         return {"entities": entities}
     except Exception as e:
         err_msg = str(e)
         if "SSL" in err_msg or "EOF" in err_msg or "connection" in err_msg.lower():
             logger.info("SSL/EOF network glitch detected. Retrying extract_entities once...")
             try:
-                entities = extract_entities(doc["gemini_name"])
+                entities = extract_entities(doc["gemini_name"], custom_api_key=x_gemini_key)
+                update_document_field(doc_id, x_client_id, "entities", entities)
                 return {"entities": entities}
             except Exception as retry_e:
                 handle_exception(retry_e, "extract entities")
         handle_exception(e, "extract entities")
 
 @app.post("/api/documents/{doc_id}/rewrite")
-def get_rewritten_text(doc_id: str, payload: RewritePayload, x_client_id: str = Header(default="anonymous", alias="X-Client-Id")):
+def get_rewritten_text(
+    doc_id: str,
+    payload: RewritePayload,
+    x_client_id: str = Header(default="anonymous", alias="X-Client-Id"),
+    x_gemini_key: str = Header(default=None, alias="X-Gemini-Key")
+):
     """
     Get the AI-rewritten text in a specified tone.
     """
@@ -290,21 +377,47 @@ def get_rewritten_text(doc_id: str, payload: RewritePayload, x_client_id: str = 
         raise HTTPException(status_code=404, detail="Document not found")
     
     try:
-        rewritten = rewrite_text(doc["gemini_name"], payload.tone)
+        rewritten = rewrite_text(doc["gemini_name"], payload.tone, custom_api_key=x_gemini_key)
+        
+        # Load, update and save rewrite JSON
+        import json
+        existing_rewrite = {}
+        if doc.get("rewrite"):
+            try:
+                existing_rewrite = json.loads(doc["rewrite"])
+            except Exception:
+                pass
+        existing_rewrite[payload.tone] = rewritten
+        update_document_field(doc_id, x_client_id, "rewrite", json.dumps(existing_rewrite))
+        
         return {"rewritten": rewritten}
     except Exception as e:
         err_msg = str(e)
         if "SSL" in err_msg or "EOF" in err_msg or "connection" in err_msg.lower():
             logger.info("SSL/EOF network glitch detected. Retrying rewrite_text once...")
             try:
-                rewritten = rewrite_text(doc["gemini_name"], payload.tone)
+                rewritten = rewrite_text(doc["gemini_name"], payload.tone, custom_api_key=x_gemini_key)
+                import json
+                existing_rewrite = {}
+                if doc.get("rewrite"):
+                    try:
+                        existing_rewrite = json.loads(doc["rewrite"])
+                    except Exception:
+                        pass
+                existing_rewrite[payload.tone] = rewritten
+                update_document_field(doc_id, x_client_id, "rewrite", json.dumps(existing_rewrite))
                 return {"rewritten": rewritten}
             except Exception as retry_e:
                 handle_exception(retry_e, "rewrite text")
         handle_exception(e, "rewrite text")
 
 @app.post("/api/documents/{doc_id}/chat")
-async def chat_with_document(doc_id: str, payload: ChatPayload, x_client_id: str = Header(default="anonymous", alias="X-Client-Id")):
+async def chat_with_document(
+    doc_id: str,
+    payload: ChatPayload,
+    x_client_id: str = Header(default="anonymous", alias="X-Client-Id"),
+    x_gemini_key: str = Header(default=None, alias="X-Gemini-Key")
+):
     """
     SSE stream endpoint for chat dialogue about the document.
     """
@@ -315,13 +428,27 @@ async def chat_with_document(doc_id: str, payload: ChatPayload, x_client_id: str
     def event_generator():
         try:
             import json
+            assistant_response_text = ""
             # Stream tokens
             for token in stream_chat(
                 file_name=doc["gemini_name"],
                 chat_history=[{"role": item.role, "content": item.content} for item in payload.chat_history],
-                user_message=payload.user_message
+                user_message=payload.user_message,
+                custom_api_key=x_gemini_key
             ):
+                assistant_response_text += token
                 yield f"data: {json.dumps({'text': token})}\n\n"
+            
+            # Save turns to SQLite
+            existing_history = []
+            if doc.get("chat_history"):
+                try:
+                    existing_history = json.loads(doc["chat_history"])
+                except Exception:
+                    pass
+            existing_history.append({"role": "user", "content": payload.user_message})
+            existing_history.append({"role": "assistant", "content": assistant_response_text})
+            update_document_field(doc_id, x_client_id, "chat_history", json.dumps(existing_history))
         except Exception as e:
             err_msg = str(e)
             logger.error(f"SSE error: {err_msg}")
