@@ -1,11 +1,22 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { auth } from './firebase';
+import { auth, db } from './firebase';
+import {
+  doc,
+  setDoc,
+  deleteDoc,
+  collection,
+  query,
+  orderBy,
+  onSnapshot
+} from 'firebase/firestore';
 import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   signOut,
   onAuthStateChanged,
-  updateProfile
+  updateProfile,
+  GoogleAuthProvider,
+  signInWithPopup
 } from 'firebase/auth';
 import './App.css';
 
@@ -87,7 +98,7 @@ function LoadingScreen() {
 // ─────────────────────────────────────────────
 // AUTH SCREEN
 // ─────────────────────────────────────────────
-function AuthScreen() {
+function AuthScreen({ onNavigate }) {
   const [mode, setMode] = useState('signin'); // 'signin' | 'signup'
   const [name, setName] = useState('');
   const [password, setPassword] = useState('');
@@ -133,6 +144,19 @@ function AuthScreen() {
     } finally { setLoading(false); }
   };
 
+  const handleGoogleSignIn = async () => {
+    setError('');
+    setLoading(true);
+    try {
+      const provider = new GoogleAuthProvider();
+      await signInWithPopup(auth, provider);
+    } catch (err) {
+      setError(friendlyErr(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="auth-screen">
       <div className="auth-blobs">
@@ -157,12 +181,31 @@ function AuthScreen() {
             {loading ? <span className="dot-spin" /> : (mode === 'signup' ? '✨ Create Account' : '→ Sign In')}
           </button>
         </form>
+        <div className="auth-divider">
+          <span className="auth-divider-line"></span>
+          <span className="auth-divider-text">OR</span>
+          <span className="auth-divider-line"></span>
+        </div>
+        <button className="google-auth-btn" onClick={handleGoogleSignIn} type="button" disabled={loading}>
+          <svg className="google-icon" viewBox="0 0 24 24" width="20" height="20">
+            <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+            <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+            <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+            <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+          </svg>
+          Sign in with Google
+        </button>
         <p className="auth-toggle">
           {mode === 'signup' ? 'Already have an account?' : "Don't have an account?"}
           <button onClick={() => { setMode(m => m === 'signup' ? 'signin' : 'signup'); setError(''); }}>
             {mode === 'signup' ? ' Sign In' : ' Sign Up'}
           </button>
         </p>
+        <div className="auth-footer-links">
+          <button onClick={() => onNavigate('/')} type="button">← Home</button>
+          <button onClick={() => onNavigate('/privacy')} type="button">Privacy Policy</button>
+          <button onClick={() => onNavigate('/terms')} type="button">Terms of Service</button>
+        </div>
       </div>
     </div>
   );
@@ -171,7 +214,7 @@ function AuthScreen() {
 // ─────────────────────────────────────────────
 // HERO SCREEN
 // ─────────────────────────────────────────────
-function HeroScreen({ user, documents, onUpload, onSelectDoc, isUploading, uploadError, onSettingsOpen }) {
+function HeroScreen({ user, documents, onUpload, onSelectDoc, isUploading, uploadError, onSettingsOpen, onDeleteDoc }) {
   const fileRef = useRef(null);
   const [dragging, setDragging] = useState(false);
   const [search, setSearch] = useState('');
@@ -237,10 +280,15 @@ function HeroScreen({ user, documents, onUpload, onSelectDoc, isUploading, uploa
           </div>
           <div className="recent-items">
             {filtered.map((doc, i) => (
-              <div key={doc.id} className="recent-item" onClick={() => onSelectDoc(doc.id)} style={{ animationDelay: `${i * 0.04}s` }}>
-                <span className="ri-icon">{doc.mime_type === 'application/pdf' ? '📄' : '📝'}</span>
-                <div className="ri-info"><span className="ri-name">{doc.filename}</span><span className="ri-size">{formatBytes(doc.size)}</span></div>
-                <span className="ri-arrow">→</span>
+              <div key={doc.id} className="recent-item" onClick={() => onSelectDoc(doc.id)} style={{ animationDelay: `${i * 0.04}s`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', overflow: 'hidden', flex: 1 }}>
+                  <span className="ri-icon">{doc.mime_type === 'application/pdf' ? '📄' : '📝'}</span>
+                  <div className="ri-info" style={{ overflow: 'hidden' }}><span className="ri-name" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{doc.filename}</span><span className="ri-size">{formatBytes(doc.size)}</span></div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  {onDeleteDoc && <button className="ri-delete-btn" onClick={(e) => onDeleteDoc(doc.id, e)} title="Delete Document">×</button>}
+                  <span className="ri-arrow">→</span>
+                </div>
               </div>
             ))}
           </div>
@@ -365,10 +413,19 @@ function AnalyzingScreen({ progress, stageIdx, onCancel }) {
     <div className="analyzing">
       <div className="a-bg"><div className="a-b1" /><div className="a-b2" /></div>
       <div className="a-content">
-        <div className="a-orb-wrap">
-          <div className="a-orb" />
-          <div className="a-ring ar1" /><div className="a-ring ar2" /><div className="a-ring ar3" />
-          {[...Array(8)].map((_, i) => <div key={i} className="a-particle" style={{ '--pi': i }} />)}
+        <div className="cube-container">
+          <div className="cube">
+            <div className="face front">AURA</div>
+            <div className="face back">AURA</div>
+            <div className="face right">AI</div>
+            <div className="face left">AI</div>
+            <div className="face top">✨</div>
+            <div className="face bottom">✨</div>
+            <div className="cube-core" />
+          </div>
+          <div className="cube-ring-x" />
+          <div className="cube-ring-y" />
+          <div className="cube-ring-z" />
         </div>
         <div className="a-text">
           <div className="a-icon">{s.icon}</div>
@@ -397,7 +454,7 @@ function AnalyzingScreen({ progress, stageIdx, onCancel }) {
 // ─────────────────────────────────────────────
 // DASHBOARD
 // ─────────────────────────────────────────────
-function Dashboard({ user, doc, analysis, chatMessages, setChatMessages, documents, onSelectDoc, onBack, onNewUpload, activeDocId, onSettingsOpen, apiRequests, onTrackRequest, onUpdateDoc }) {
+function Dashboard({ user, doc, analysis, chatMessages, setChatMessages, documents, onSelectDoc, onBack, onNewUpload, activeDocId, onSettingsOpen, apiRequests, onTrackRequest, onUpdateDoc, onDeleteDoc }) {
   const [view, setView] = useState('insights'); // 'insights' | 'rewriter'
   const [chatOpen, setChatOpen] = useState(false);
   const [chatInput, setChatInput] = useState('');
@@ -467,13 +524,21 @@ function Dashboard({ user, doc, analysis, chatMessages, setChatMessages, documen
     const history = [...msgs, { role: 'user', content: userMsg }];
     setChatMessages(prev => ({ ...prev, [activeDocId]: history }));
     try {
+      const chatHeaders = {
+        'Content-Type': 'application/json',
+        'X-Client-Id': clientId,
+        'X-Gemini-Key': localStorage.getItem('aura_user_gemini_key') || ''
+      };
+      if (doc?.gemini_name) {
+        chatHeaders['X-Gemini-Name'] = doc.gemini_name;
+      }
+      if (doc?.filename) {
+        chatHeaders['X-File-Name'] = doc.filename;
+      }
+
       const res = await fetch(`${API_URL}/api/documents/${activeDocId}/chat`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Client-Id': clientId,
-          'X-Gemini-Key': localStorage.getItem('aura_user_gemini_key') || ''
-        },
+        headers: chatHeaders,
         body: JSON.stringify({ chat_history: msgs, user_message: userMsg }),
       });
       let reply = '';
@@ -490,6 +555,17 @@ function Dashboard({ user, doc, analysis, chatMessages, setChatMessages, documen
         });
       }
       onTrackRequest();
+
+      if (user) {
+        try {
+          const docRef = doc(db, 'users', user.uid, 'documents', activeDocId);
+          await setDoc(docRef, {
+            chat_history: JSON.stringify([...history, { role: 'assistant', content: reply }])
+          }, { merge: true });
+        } catch (fErr) {
+          console.error("Failed to save chat to Firestore:", fErr);
+        }
+      }
     } catch (e) { console.error('Chat err:', e); }
     finally { setStreaming(false); }
   };
@@ -497,13 +573,21 @@ function Dashboard({ user, doc, analysis, chatMessages, setChatMessages, documen
   const doRewrite = async () => {
     setRewriting(true); setRewriteResult('');
     try {
+      const rwHeaders = {
+        'Content-Type': 'application/json',
+        'X-Client-Id': clientId,
+        'X-Gemini-Key': localStorage.getItem('aura_user_gemini_key') || ''
+      };
+      if (doc?.gemini_name) {
+        rwHeaders['X-Gemini-Name'] = doc.gemini_name;
+      }
+      if (doc?.filename) {
+        rwHeaders['X-File-Name'] = doc.filename;
+      }
+
       const r = await fetch(`${API_URL}/api/documents/${activeDocId}/rewrite`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Client-Id': clientId,
-          'X-Gemini-Key': localStorage.getItem('aura_user_gemini_key') || ''
-        },
+        headers: rwHeaders,
         body: JSON.stringify({ tone }),
       });
       const d = await r.json();
@@ -512,6 +596,17 @@ function Dashboard({ user, doc, analysis, chatMessages, setChatMessages, documen
         const updatedRewrite = { ...(doc?.rewrite || {}), [tone]: d.rewritten };
         onUpdateDoc({ rewrite: updatedRewrite });
         setRewriteResult(d.rewritten || '');
+
+        if (user) {
+          try {
+            const docRef = doc(db, 'users', user.uid, 'documents', activeDocId);
+            await setDoc(docRef, {
+              rewrite: JSON.stringify(updatedRewrite)
+            }, { merge: true });
+          } catch (fErr) {
+            console.error("Failed to save rewrite to Firestore:", fErr);
+          }
+        }
       } else {
         alert(d.detail || 'Rewrite failed.');
       }
@@ -549,9 +644,12 @@ function Dashboard({ user, doc, analysis, chatMessages, setChatMessages, documen
         <div className="ds-list">
           <span className="ds-list-label">Workspace</span>
           {filtered.map(d => (
-            <div key={d.id} className={`ds-item ${d.id === activeDocId ? 'ds-active' : ''}`} onClick={() => { onSelectDoc(d.id); setMobileSideOpen(false); }}>
-              <span>{d.mime_type === 'application/pdf' ? '📄' : '📝'}</span>
-              <span className="ds-iname">{d.filename}</span>
+            <div key={d.id} className={`ds-item ${d.id === activeDocId ? 'ds-active' : ''}`} onClick={() => { onSelectDoc(d.id); setMobileSideOpen(false); }} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden', flex: 1 }}>
+                <span>{d.mime_type === 'application/pdf' ? '📄' : '📝'}</span>
+                <span className="ds-iname" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.filename}</span>
+              </div>
+              {onDeleteDoc && <button className="ds-item-delete" onClick={(e) => onDeleteDoc(d.id, e)} title="Delete Document">×</button>}
             </div>
           ))}
         </div>
@@ -796,10 +894,19 @@ function Dashboard({ user, doc, analysis, chatMessages, setChatMessages, documen
 // ─────────────────────────────────────────────
 // MAIN APP
 // ─────────────────────────────────────────────
-function MainApp({ user }) {
-  const [step, setStep] = useState('hero');
+function MainApp({ user, onNavigate, path }) {
+  // Parse query parameters
+  const urlParams = new URLSearchParams(window.location.search);
+  const activeDocId = urlParams.get('id');
+
+  // Derive step based on pathname
+  let step = 'hero';
+  if (path.startsWith('/preview')) step = 'preview';
+  else if (path.startsWith('/analyze')) step = 'analyzing';
+  else if (path.startsWith('/dashboard')) step = 'dashboard';
+  else if (path.startsWith('/home')) step = 'hero';
+
   const [documents, setDocuments] = useState([]);
-  const [activeDocId, setActiveDocId] = useState(null);
   const [activeDoc, setActiveDoc] = useState(null);
   const [analysisCache, setAnalysisCache] = useState(() => { try { return JSON.parse(localStorage.getItem('aura_v3_analysis') || '{}'); } catch { return {}; } });
   const [chatMessages, setChatMessages] = useState(() => { try { return JSON.parse(localStorage.getItem('aura_v3_chats') || '{}'); } catch { return {}; } });
@@ -848,10 +955,157 @@ function MainApp({ user }) {
   useEffect(() => { localStorage.setItem('aura_v3_analysis', JSON.stringify(analysisCache)); }, [analysisCache]);
   useEffect(() => { localStorage.setItem('aura_v3_chats', JSON.stringify(chatMessages)); }, [chatMessages]);
 
+  // Real-time Firestore document sync
+  useEffect(() => {
+    if (!user) return;
+
+    const q = query(
+      collection(db, 'users', user.uid, 'documents'),
+      orderBy('uploaded_at', 'desc')
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const docsFromFirestore = [];
+      snapshot.forEach((docSnap) => {
+        const dData = docSnap.data();
+        let parsedAnalysis = null;
+        if (dData.full_analysis) {
+          parsedAnalysis = typeof dData.full_analysis === 'string' ? JSON.parse(dData.full_analysis) : dData.full_analysis;
+        }
+        let parsedRewrite = {};
+        if (dData.rewrite) {
+          parsedRewrite = typeof dData.rewrite === 'string' ? JSON.parse(dData.rewrite) : dData.rewrite;
+        }
+        let parsedChat = [];
+        if (dData.chat_history) {
+          parsedChat = typeof dData.chat_history === 'string' ? JSON.parse(dData.chat_history) : dData.chat_history;
+        }
+
+        docsFromFirestore.push({
+          id: docSnap.id,
+          ...dData,
+          full_analysis: parsedAnalysis,
+          rewrite: parsedRewrite,
+          chat_history: parsedChat
+        });
+      });
+
+      if (docsFromFirestore.length > 0) {
+        setDocuments(docsFromFirestore);
+
+        const newAnalysisCache = {};
+        const newChatMessages = {};
+        docsFromFirestore.forEach(d => {
+          if (d.full_analysis) {
+            newAnalysisCache[d.id] = d.full_analysis;
+          }
+          if (d.chat_history) {
+            newChatMessages[d.id] = d.chat_history;
+          }
+        });
+
+        setAnalysisCache(prev => ({ ...prev, ...newAnalysisCache }));
+        setChatMessages(prev => ({ ...prev, ...newChatMessages }));
+
+        // Sync active document metadata
+        if (activeDocId) {
+          const act = docsFromFirestore.find(d => d.id === activeDocId);
+          if (act) {
+            setActiveDoc(act);
+          }
+        }
+      }
+    }, (err) => {
+      console.error("Firestore sync error:", err);
+    });
+
+    return () => unsubscribe();
+  }, [user, activeDocId]);
+
   // Load documents on mount or client ID change
   useEffect(() => {
     fetchDocs();
   }, [clientId]);
+
+  // Listen to activeDocId changes to fetch document metadata & load PDF preview
+  useEffect(() => {
+    if (!activeDocId) {
+      setActiveDoc(null);
+      setPdfDoc(null);
+      setThumbnails([]);
+      return;
+    }
+
+    const loadActiveDoc = async () => {
+      setPdfDoc(null);
+      setThumbnails([]);
+      setPageNum(1);
+      setZoomMultiplier(1.0);
+
+      // Find document in local state to retrieve gemini_name & filename
+      const localDoc = documents.find(d => d.id === activeDocId);
+      const reqHeaders = {
+        'X-Client-Id': clientId
+      };
+      if (localDoc?.gemini_name) {
+        reqHeaders['X-Gemini-Name'] = localDoc.gemini_name;
+      }
+      if (localDoc?.filename) {
+        reqHeaders['X-File-Name'] = localDoc.filename;
+      }
+
+      // Fetch doc details & restore DB-persisted data
+      try {
+        const r = await fetch(`${API_URL}/api/documents/${activeDocId}`, { headers: reqHeaders });
+        if (r.ok) {
+          const d = await r.json();
+          setActiveDoc(d);
+          // Restore full_analysis from DB
+          if (d.full_analysis) {
+            try {
+              const parsed = typeof d.full_analysis === 'string' ? JSON.parse(d.full_analysis) : d.full_analysis;
+              setAnalysisCache(prev => ({ ...prev, [activeDocId]: parsed }));
+            } catch {}
+          }
+          // Restore chat history from DB
+          if (d.chat_history?.length > 0) {
+            setChatMessages(prev => ({ ...prev, [activeDocId]: d.chat_history }));
+          }
+        }
+      } catch (err) {
+        console.error("Failed to load active doc metadata:", err);
+      }
+
+      // Load PDF for preview
+      try {
+        const r = await fetch(`${API_URL}/api/documents/${activeDocId}/file?client_id=${clientId}`);
+        if (!r.ok) return;
+        const ct = r.headers.get('content-type') || '';
+        if (ct.includes('application/pdf')) {
+          const buf = await r.arrayBuffer();
+          const pdf = await window.pdfjsLib.getDocument({ data: buf }).promise;
+          setPdfDoc(pdf);
+          setNumPages(pdf.numPages);
+          genThumbs(pdf);
+        }
+      } catch (e) {
+        console.error('PDF load err:', e);
+      }
+    };
+
+    loadActiveDoc();
+  }, [activeDocId, clientId]);
+
+  // Trigger analysis automatically when landing on /analyze route
+  useEffect(() => {
+    if (step === 'analyzing' && activeDocId) {
+      if (analysisCache[activeDocId]) {
+        onNavigate(`/dashboard?id=${activeDocId}`);
+      } else {
+        startAnalysis();
+      }
+    }
+  }, [step, activeDocId]);
 
   // PDF canvas rendering
   useEffect(() => {
@@ -911,56 +1165,35 @@ function MainApp({ user }) {
       if (!r.ok) throw new Error(data.detail || `Upload failed (${r.status})`);
       trackRequest();
       setDocuments(prev => [data, ...prev]);
-      await loadDoc(data.id, data);
+
+      if (user) {
+        try {
+          const docRef = doc(db, 'users', user.uid, 'documents', data.id);
+          await setDoc(docRef, {
+            id: data.id,
+            filename: data.filename,
+            mime_type: data.mime_type,
+            size: data.size,
+            gemini_name: data.gemini_name,
+            uploaded_at: Date.now() / 1000
+          });
+        } catch (fErr) {
+          console.error("Failed to save doc metadata to Firestore:", fErr);
+        }
+      }
+
+      onNavigate(`/preview?id=${data.id}`);
     } catch (e) {
       setUploadError(e.message);
       console.error('Upload error:', e);
     } finally { setIsUploading(false); }
   };
 
-  const loadDoc = async (docId, docData = null) => {
-    setActiveDocId(docId);
-    setPdfDoc(null); setThumbnails([]); setPageNum(1); setZoomMultiplier(1.0);
-
-    // Fetch doc details & restore DB-persisted data
-    try {
-      const r = await fetch(`${API_URL}/api/documents/${docId}`, { headers: { 'X-Client-Id': clientId } });
-      if (r.ok) {
-        const d = await r.json();
-        setActiveDoc(d);
-        // Restore full_analysis from DB
-        if (d.full_analysis) {
-          try {
-            const parsed = typeof d.full_analysis === 'string' ? JSON.parse(d.full_analysis) : d.full_analysis;
-            setAnalysisCache(prev => ({ ...prev, [docId]: parsed }));
-          } catch {}
-        }
-        // Restore chat history from DB
-        if (d.chat_history?.length > 0) {
-          setChatMessages(prev => ({ ...prev, [docId]: d.chat_history }));
-        }
-      }
-    } catch {}
-
-    // Load PDF for preview
-    try {
-      const r = await fetch(`${API_URL}/api/documents/${docId}/file?client_id=${clientId}`);
-      if (!r.ok) return;
-      const ct = r.headers.get('content-type') || '';
-      if (ct.includes('application/pdf')) {
-        const buf = await r.arrayBuffer();
-        const pdf = await window.pdfjsLib.getDocument({ data: buf }).promise;
-        setPdfDoc(pdf);
-        setNumPages(pdf.numPages);
-        genThumbs(pdf);
-      }
-    } catch (e) { console.error('PDF load err:', e); }
-
-    // If already has analysis cached, jump straight to dashboard
-    if (analysisCache[docId]) {
-      setStep('dashboard');
+  const handleSelectDoc = (docId) => {
+    if (analysisCache[docId] || documents.find(d => d.id === docId)?.full_analysis) {
+      onNavigate(`/dashboard?id=${docId}`);
     } else {
-      setStep('preview');
+      onNavigate(`/preview?id=${docId}`);
     }
   };
 
@@ -984,17 +1217,15 @@ function MainApp({ user }) {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
-    setStep('preview');
+    onNavigate(`/preview?id=${activeDocId}`);
   };
 
   const startAnalysis = async () => {
-    // Use cached analysis if available
-    if (analysisCache[activeDocId]) { setStep('dashboard'); return; }
+    if (analysisCache[activeDocId]) { onNavigate(`/dashboard?id=${activeDocId}`); return; }
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
-    setStep('analyzing');
     setProgress(0); setStageIdx(0);
 
     const stageTimings = [
@@ -1019,13 +1250,21 @@ function MainApp({ user }) {
       requestAnimationFrame(tick);
     });
 
-    // Fire API call + animations in parallel
+    const localDoc = documents.find(d => d.id === activeDocId);
+    const apiHeaders = {
+      'X-Client-Id': clientId,
+      'X-Gemini-Key': localStorage.getItem('aura_user_gemini_key') || ''
+    };
+    if (localDoc?.gemini_name) {
+      apiHeaders['X-Gemini-Name'] = localDoc.gemini_name;
+    }
+    if (localDoc?.filename) {
+      apiHeaders['X-File-Name'] = localDoc.filename;
+    }
+
     const apiPromise = fetch(`${API_URL}/api/documents/${activeDocId}/analyze`, {
       method: 'POST',
-      headers: {
-        'X-Client-Id': clientId,
-        'X-Gemini-Key': localStorage.getItem('aura_user_gemini_key') || ''
-      },
+      headers: apiHeaders,
       signal: controller.signal
     }).then(r => r.json());
 
@@ -1036,16 +1275,62 @@ function MainApp({ user }) {
       const analysis = await apiPromise;
       trackRequest();
       setAnalysisCache(prev => ({ ...prev, [activeDocId]: analysis }));
+
+      if (user) {
+        try {
+          const docRef = doc(db, 'users', user.uid, 'documents', activeDocId);
+          await setDoc(docRef, {
+            full_analysis: JSON.stringify(analysis)
+          }, { merge: true });
+        } catch (fErr) {
+          console.error("Failed to save analysis to Firestore:", fErr);
+        }
+      }
+
       setProgress(100);
       await new Promise(r => setTimeout(r, 600));
-      setStep('dashboard');
+      onNavigate(`/dashboard?id=${activeDocId}`);
     } catch (e) {
       if (e.name === 'AbortError' || e.message === 'aborted') {
         console.log('Analysis cancelled by user.');
       } else {
         console.error('Analysis error:', e);
-        setStep('preview');
+        onNavigate(`/preview?id=${activeDocId}`);
       }
+    }
+  };
+
+  const handleDeleteDoc = async (docId, e) => {
+    if (e) e.stopPropagation();
+    if (!confirm(`Are you sure you want to delete this document?`)) return;
+
+    try {
+      const r = await fetch(`${API_URL}/api/documents/${docId}`, {
+        method: 'DELETE',
+        headers: {
+          'X-Client-Id': clientId,
+          'X-Gemini-Key': localStorage.getItem('aura_user_gemini_key') || ''
+        }
+      });
+      if (r.ok) {
+        setDocuments(prev => prev.filter(d => d.id !== docId));
+        if (user) {
+          try {
+            const docRef = doc(db, 'users', user.uid, 'documents', docId);
+            await deleteDoc(docRef);
+          } catch (fErr) {
+            console.error("Failed to delete document from Firestore:", fErr);
+          }
+        }
+        if (activeDocId === docId) {
+          onNavigate('/home');
+        }
+      } else {
+        const d = await r.json();
+        alert(d.detail || 'Delete failed.');
+      }
+    } catch (err) {
+      console.error('Delete error:', err);
     }
   };
 
@@ -1053,10 +1338,10 @@ function MainApp({ user }) {
 
   return (
     <>
-      {step === 'hero' && <HeroScreen user={user} documents={documents} onUpload={handleUpload} onSelectDoc={loadDoc} isUploading={isUploading} uploadError={uploadError} onSettingsOpen={() => setSettingsOpen(true)} />}
-      {step === 'preview' && <PreviewScreen doc={docForActive} pdfDoc={pdfDoc} pageNum={pageNum} numPages={numPages} zoomMultiplier={zoomMultiplier} setPageNum={setPageNum} setZoomMultiplier={setZoomMultiplier} canvasRef={canvasRef} containerRef={containerRef} thumbnails={thumbnails} onStart={startAnalysis} onBack={() => setStep('hero')} isAnalysed={!!analysisCache[activeDocId]} />}
+      {step === 'hero' && <HeroScreen user={user} documents={documents} onUpload={handleUpload} onSelectDoc={handleSelectDoc} isUploading={isUploading} uploadError={uploadError} onSettingsOpen={() => setSettingsOpen(true)} onDeleteDoc={handleDeleteDoc} />}
+      {step === 'preview' && <PreviewScreen doc={docForActive} pdfDoc={pdfDoc} pageNum={pageNum} numPages={numPages} zoomMultiplier={zoomMultiplier} setPageNum={setPageNum} setZoomMultiplier={setZoomMultiplier} canvasRef={canvasRef} containerRef={containerRef} thumbnails={thumbnails} onStart={() => onNavigate(`/analyze?id=${activeDocId}`)} onBack={() => onNavigate('/home')} isAnalysed={!!analysisCache[activeDocId]} />}
       {step === 'analyzing' && <AnalyzingScreen progress={progress} stageIdx={stageIdx} onCancel={cancelAnalysis} />}
-      {step === 'dashboard' && <Dashboard user={user} doc={docForActive} analysis={analysisCache[activeDocId]} chatMessages={chatMessages} setChatMessages={setChatMessages} documents={documents} onSelectDoc={loadDoc} onBack={() => setStep('preview')} onNewUpload={() => setStep('hero')} activeDocId={activeDocId} onSettingsOpen={() => setSettingsOpen(true)} apiRequests={apiRequests} onTrackRequest={trackRequest} onUpdateDoc={updateActiveDocFields} />}
+      {step === 'dashboard' && <Dashboard user={user} doc={docForActive} analysis={analysisCache[activeDocId]} chatMessages={chatMessages} setChatMessages={setChatMessages} documents={documents} onSelectDoc={handleSelectDoc} onBack={() => onNavigate(`/preview?id=${activeDocId}`)} onNewUpload={() => onNavigate('/home')} activeDocId={activeDocId} onSettingsOpen={() => setSettingsOpen(true)} apiRequests={apiRequests} onTrackRequest={trackRequest} onUpdateDoc={updateActiveDocFields} onDeleteDoc={handleDeleteDoc} />}
 
       {settingsOpen && (
         <div className="settings-modal-overlay" onClick={() => setSettingsOpen(false)}>
@@ -1092,12 +1377,434 @@ function MainApp({ user }) {
 }
 
 // ─────────────────────────────────────────────
+// LANDING PAGE
+// ─────────────────────────────────────────────
+function LandingPage({ onNavigate }) {
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  return (
+    <div className="landing-page">
+      <header className="landing-nav">
+        <div className="nav-brand">
+          <img src="/logo.png" className="logo-img animated-logo" alt="AURA" />
+          <span>AURA</span>
+        </div>
+        <button className="landing-nav-hamburger" onClick={() => setMobileMenuOpen(!mobileMenuOpen)} aria-label="Toggle Menu">
+          {mobileMenuOpen ? '×' : '☰'}
+        </button>
+        <div className="nav-actions">
+          <button className="landing-nav-link" onClick={() => onNavigate('/about')} type="button">About</button>
+          <button className="landing-nav-link" onClick={() => onNavigate('/faq')} type="button">FAQ</button>
+          <button className="landing-nav-link" onClick={() => onNavigate('/contact')} type="button">Contact</button>
+          <button className="landing-nav-btn" onClick={() => onNavigate('/login')} type="button">Sign In</button>
+          <button className="landing-nav-cta" onClick={() => onNavigate('/login')} type="button">Get Started</button>
+        </div>
+      </header>
+
+      {mobileMenuOpen && (
+        <div className="landing-mobile-menu">
+          <button className="mobile-menu-link" onClick={() => { setMobileMenuOpen(false); onNavigate('/about'); }} type="button">About</button>
+          <button className="mobile-menu-link" onClick={() => { setMobileMenuOpen(false); onNavigate('/faq'); }} type="button">FAQ</button>
+          <button className="mobile-menu-link" onClick={() => { setMobileMenuOpen(false); onNavigate('/contact'); }} type="button">Contact</button>
+          <button className="mobile-menu-btn" onClick={() => { setMobileMenuOpen(false); onNavigate('/login'); }} type="button">Sign In</button>
+          <button className="mobile-menu-cta" onClick={() => { setMobileMenuOpen(false); onNavigate('/login'); }} type="button">Get Started</button>
+        </div>
+      )}
+
+      <main className="landing-main">
+        <section className="landing-hero">
+          <p className="hero-tag">✨ Meet your Document Co-pilot</p>
+          <h1 className="hero-title">AURA Document Analyzer</h1>
+          <p className="hero-subtitle">
+            An intelligent document workspace that parses, summarizes, structures, and chats with text or scanned documents using Google Gemini.
+          </p>
+          <div className="hero-ctas">
+            <button className="hero-cta-primary" onClick={() => onNavigate('/login')} type="button">Start Analyzing Free →</button>
+          </div>
+        </section>
+
+        <section className="landing-features">
+          <h2 className="section-title">Product Capabilities</h2>
+          <div className="features-grid">
+            <div className="f-card">
+              <span className="fc-icon">✨</span>
+              <h3>Executive Summarization</h3>
+              <p>Extracts deep insights, reading time, word count, and generates structured executive summaries.</p>
+            </div>
+            <div className="f-card">
+              <span className="fc-icon">🏷️</span>
+              <h3>Entity Extraction</h3>
+              <p>Finds people, organizations, dates, and financial metrics and organizes them into clean, interactive tables.</p>
+            </div>
+            <div className="f-card">
+              <span className="fc-icon">✏️</span>
+              <h3>Tone Rewriter</h3>
+              <p>Instantly alters sections of your document to Professional, Casual, Persuasive, or Simplified (ELI5) tones.</p>
+            </div>
+            <div className="f-card">
+              <span className="fc-icon">💬</span>
+              <h3>Interactive Q&A Chat</h3>
+              <p>Ask anything about your document and get real-time, token-by-token streaming responses.</p>
+            </div>
+          </div>
+        </section>
+
+        <section className="landing-security">
+          <div className="security-card">
+            <h3>🔒 Privacy & Security First</h3>
+            <p>
+              AURA runs with maximum privacy. Your documents are isolated locally to your device via Client UUIDs. The files uploaded to Gemini are deleted automatically, and you can provide your own Gemini API key for complete control.
+            </p>
+          </div>
+        </section>
+      </main>
+
+      <footer className="landing-footer">
+        <p>© {new Date().getFullYear()} AURA Document Analyzer. All rights reserved.</p>
+        <div className="footer-links">
+          <button onClick={() => onNavigate('/about')} type="button">About Us</button>
+          <button onClick={() => onNavigate('/faq')} type="button">FAQ</button>
+          <button onClick={() => onNavigate('/contact')} type="button">Contact</button>
+          <button onClick={() => onNavigate('/privacy')} type="button">Privacy Policy</button>
+          <button onClick={() => onNavigate('/terms')} type="button">Terms of Service</button>
+        </div>
+      </footer>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// PRIVACY PAGE
+// ─────────────────────────────────────────────
+function PrivacyPage({ onNavigate }) {
+  return (
+    <div className="doc-page">
+      <div className="doc-container">
+        <header className="doc-header">
+          <button className="doc-back-btn" onClick={() => onNavigate('/')} type="button">← Back to Home</button>
+          <h1>Privacy Policy</h1>
+          <p>Last updated: July 2026</p>
+        </header>
+
+        <section className="doc-content">
+          <p>
+            At AURA, we value your privacy and are committed to protecting your personal data and uploaded document contents. This policy explains how we handle and secure your information.
+          </p>
+
+          <h3>1. Document & File Handling</h3>
+          <p>
+            When you upload a PDF or TXT document:
+            <ul>
+              <li>The file is temporarily stored on our secure containerized server to enable text extraction.</li>
+              <li>The document is uploaded to the Google Gemini Files API to facilitate multimodal reasoning.</li>
+              <li>Documents can be deleted from the database and the Gemini API at any time by clicking the delete button in the workspace.</li>
+            </ul>
+          </p>
+
+          <h3>2. Session Isolation & Client IDs</h3>
+          <p>
+            AURA utilizes local browser storage (`localStorage`) to generate a unique, anonymous Client ID (`X-Client-Id`). All database queries are strictly isolated to this Client ID. This ensures your documents remain private to your device without requiring you to share sensitive personal details.
+          </p>
+
+          <h3>3. API Key Management</h3>
+          <p>
+            If you provide a custom Google Gemini API key:
+            <ul>
+              <li>It is stored exclusively in your local browser storage.</li>
+              <li>It is only sent securely in HTTP headers directly to our API.</li>
+              <li>We never log, store, or share your API key on our backend database.</li>
+            </ul>
+          </p>
+
+          <h3>4. Third-Party Services</h3>
+          <p>
+            AURA integrates with the Google Gemini API to provide document reasoning, summarization, entity extraction, and chat. By using AURA, you agree to Google's standard AI API usage policies.
+          </p>
+        </section>
+        
+        <footer className="doc-footer">
+          <p>© {new Date().getFullYear()} AURA. All rights reserved.</p>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// TERMS PAGE
+// ─────────────────────────────────────────────
+function TermsPage({ onNavigate }) {
+  return (
+    <div className="doc-page">
+      <div className="doc-container">
+        <header className="doc-header">
+          <button className="doc-back-btn" onClick={() => onNavigate('/')} type="button">← Back to Home</button>
+          <h1>Terms of Service</h1>
+          <p>Last updated: July 2026</p>
+        </header>
+
+        <section className="doc-content">
+          <p>
+            Welcome to AURA. By accessing or using our document analyzer, you agree to comply with and be bound by the following Terms of Service.
+          </p>
+
+          <h3>1. Use of the Service</h3>
+          <p>
+            AURA is an AI-powered document intelligence tool designed for academic, professional, and personal productivity. You agree to use the service responsibly and not for any malicious, illegal, or harmful activities.
+          </p>
+
+          <h3>2. AI-Generated Output & Disclaimers</h3>
+          <p>
+            AURA utilizes Large Language Models (Google Gemini) to generate summaries, extract entities, rewrite text, and answer chat queries. 
+            <ul>
+              <li>Output is generated automatically and may contain inaccuracies or "hallucinations".</li>
+              <li>All analysis and reports are provided "as-is" without warranty. Users should independently verify critical financial values, dates, and legal contracts.</li>
+            </ul>
+          </p>
+
+          <h3>3. Rate Limits & Custom Keys</h3>
+          <p>
+            To ensure fair usage, default shared API keys are subject to rate limiting. Users may provide their own Google Gemini API key to bypass these quotas. You are responsible for any usage charges incurred on your personal API key.
+          </p>
+
+          <h3>4. Limitation of Liability</h3>
+          <p>
+            Under no circumstances shall AURA or its developers be liable for any direct, indirect, incidental, or consequential damages resulting from the use or inability to use the service, including document data loss or API key issues.
+          </p>
+        </section>
+
+        <footer className="doc-footer">
+          <p>© {new Date().getFullYear()} AURA. All rights reserved.</p>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// ABOUT PAGE
+// ─────────────────────────────────────────────
+function AboutPage({ onNavigate }) {
+  return (
+    <div className="doc-page">
+      <div className="doc-container">
+        <header className="doc-header">
+          <button className="doc-back-btn" onClick={() => onNavigate('/')} type="button">← Back to Home</button>
+          <h1>About AURA</h1>
+          <p>The AI Unified Reading Assistant Project</p>
+        </header>
+
+        <section className="doc-content">
+          <p>
+            AURA (AI Unified Reading Assistant) is a modern, containerized, full-stack document intelligence dashboard. It was developed as a capstone assessment for the **Vibe Coding Masterclass Series** under the **IBM SkillsBuild Internship Program**.
+          </p>
+
+          <h3>Project Objectives</h3>
+          <p>
+            The objective of AURA is to solve the bottleneck of processing long, text-heavy PDFs, scanned invoices, contracts, and documents. By using advanced Generative AI and cloud hosting, AURA parses, summarizes, structures, and allows interactive conversational Q&A with any file in real-time.
+          </p>
+
+          <h3>Tech Stack & Architecture</h3>
+          <ul>
+            <li><strong>Frontend:</strong> React.js (Vite) styled with Vanilla CSS using a custom hand-drawn ruled notebook theme.</li>
+            <li><strong>Backend:</strong> FastAPI (Python 3.12) gateway with built-in SQLite metadata tracking.</li>
+            <li><strong>AI Integration:</strong> Google GenAI SDK powered by Google Gemini Models (`gemini-2.5-flash` with fallbacks).</li>
+            <li><strong>Deployment:</strong> Multi-stage Docker container deployed on Amazon Web Services (AWS Elastic Beanstalk).</li>
+          </ul>
+
+          <h3>Developed By</h3>
+          <p>
+            <strong>Anandu Ep</strong><br />
+            Bachelor of Computer Applications (BCA) Student<br />
+            Don Bosco College, Mampetta, Kerala, India.
+          </p>
+        </section>
+
+        <footer className="doc-footer">
+          <p>© {new Date().getFullYear()} AURA. All rights reserved.</p>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// CONTACT PAGE
+// ─────────────────────────────────────────────
+function ContactPage({ onNavigate }) {
+  const [submitted, setSubmitted] = useState(false);
+  const [formData, setFormData] = useState({ name: '', email: '', message: '' });
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    setSubmitted(true);
+  };
+
+  return (
+    <div className="doc-page">
+      <div className="doc-container">
+        <header className="doc-header">
+          <button className="doc-back-btn" onClick={() => onNavigate('/')} type="button">← Back to Home</button>
+          <h1>Contact Us</h1>
+          <p>Have questions? Get in touch with us.</p>
+        </header>
+
+        <section className="doc-content">
+          {submitted ? (
+            <div className="contact-success-card">
+              <h3>✉️ Message Sent!</h3>
+              <p>Thank you for reaching out. We will get back to you at {formData.email} soon.</p>
+              <button className="doc-back-btn" onClick={() => { setSubmitted(false); setFormData({ name: '', email: '', message: '' }); }} type="button">Send another message</button>
+            </div>
+          ) : (
+            <form className="contact-form" onSubmit={handleSubmit}>
+              <div className="contact-field">
+                <label>Name</label>
+                <input type="text" placeholder="Your Name" value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} required />
+              </div>
+              <div className="contact-field">
+                <label>Email Address</label>
+                <input type="email" placeholder="you@example.com" value={formData.email} onChange={e => setFormData({ ...formData, email: e.target.value })} required />
+              </div>
+              <div className="contact-field">
+                <label>Message</label>
+                <textarea rows="5" placeholder="How can we help you?" value={formData.message} onChange={e => setFormData({ ...formData, message: e.target.value })} required></textarea>
+              </div>
+              <button className="contact-submit-btn" type="submit">Send Message →</button>
+            </form>
+          )}
+        </section>
+
+        <footer className="doc-footer">
+          <p>© {new Date().getFullYear()} AURA. All rights reserved.</p>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// FAQ PAGE
+// ─────────────────────────────────────────────
+function FAQPage({ onNavigate }) {
+  return (
+    <div className="doc-page">
+      <div className="doc-container">
+        <header className="doc-header">
+          <button className="doc-back-btn" onClick={() => onNavigate('/')} type="button">← Back to Home</button>
+          <h1>Frequently Asked Questions (FAQ)</h1>
+          <p>Everything you need to know about AURA</p>
+        </header>
+
+        <section className="doc-content">
+          <h3>Q1: What file types are supported?</h3>
+          <p>
+            AURA supports digital PDFs, scanned image-only PDFs, and plain text (`.txt`) files up to 20MB.
+          </p>
+
+          <h3>Q2: How does scanned PDF reading work?</h3>
+          <p>
+            We upload files directly to the Google Gemini Files API. Gemini's native multimodal capabilities process the page images directly, preserving layout, text structure, and tables without relying on simple OCR word dumps.
+          </p>
+
+          <h3>Q3: Is my data private?</h3>
+          <p>
+            Yes! We isolate files based on a client ID generated locally in your browser's `localStorage`. No other users can see your files. Clicking the delete icon completely wipes the file from our local database and triggers a background delete command on Google Gemini servers.
+          </p>
+
+          <h3>Q4: Why does rate limiting happen and how do I fix it?</h3>
+          <p>
+            The shared Gemini API key is shared among all demo users. If the rate limit is exceeded, you can navigate to the **API Settings (⚙️)** in the sidebar or menu and paste your own Gemini API key. This key is stored securely in your local browser only.
+          </p>
+
+          <h3>Q5: How can I contact support?</h3>
+          <p>
+            You can use our Contact page or email us at support@aura.local.
+          </p>
+        </section>
+
+        <footer className="doc-footer">
+          <p>© {new Date().getFullYear()} AURA. All rights reserved.</p>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
 // ROOT
 // ─────────────────────────────────────────────
 export default function App() {
   const [user, setUser] = useState(undefined);
+  const [path, setPath] = useState(window.location.pathname + window.location.search);
+
   useEffect(() => onAuthStateChanged(auth, setUser), []);
+
+  useEffect(() => {
+    const handlePopState = () => {
+      setPath(window.location.pathname + window.location.search);
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  const navigateTo = (newPath) => {
+    window.history.pushState({}, '', newPath);
+    setPath(newPath);
+  };
+
+  const cleanPath = path.split('?')[0];
+
   if (user === undefined) return <LoadingScreen />;
-  if (!user) return <AuthScreen />;
-  return <MainApp user={user} />;
+
+  if (cleanPath === '/privacy') {
+    return <PrivacyPage onNavigate={navigateTo} />;
+  }
+
+  if (cleanPath === '/terms') {
+    return <TermsPage onNavigate={navigateTo} />;
+  }
+
+  if (cleanPath === '/about') {
+    return <AboutPage onNavigate={navigateTo} />;
+  }
+
+  if (cleanPath === '/contact') {
+    return <ContactPage onNavigate={navigateTo} />;
+  }
+
+  if (cleanPath === '/faq') {
+    return <FAQPage onNavigate={navigateTo} />;
+  }
+
+  if (cleanPath === '/login') {
+    if (user) {
+      navigateTo('/home');
+      return <MainApp user={user} onNavigate={navigateTo} path="/home" />;
+    }
+    return <AuthScreen onNavigate={navigateTo} />;
+  }
+
+  // Workspace paths: /, /home, /preview, /analyze, /dashboard
+  const isWorkspacePath = ['/', '/home', '/preview', '/analyze', '/dashboard'].includes(cleanPath);
+
+  if (isWorkspacePath) {
+    if (!user) {
+      if (cleanPath === '/') {
+        return <LandingPage onNavigate={navigateTo} />;
+      }
+      navigateTo('/');
+      return <LandingPage onNavigate={navigateTo} />;
+    }
+    
+    // Logged-in workspace routing
+    const effectivePath = path === '/' ? '/home' : path;
+    return <MainApp user={user} onNavigate={navigateTo} path={effectivePath} />;
+  }
+
+  // Fallback to Landing or Workspace Home
+  if (!user) {
+    return <LandingPage onNavigate={navigateTo} />;
+  }
+  return <MainApp user={user} onNavigate={navigateTo} path="/home" />;
 }

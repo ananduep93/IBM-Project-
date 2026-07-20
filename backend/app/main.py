@@ -149,6 +149,7 @@ async def upload_document(
         "mime_type": doc["mime_type"],
         "is_scanned": is_scanned,
         "size": doc["size"],
+        "gemini_name": doc["gemini_name"],
         "text_preview": local_text[:2000] # Provide snippet
     }
 
@@ -159,12 +160,34 @@ def list_documents(x_client_id: str = Header(default="anonymous", alias="X-Clien
     """
     return get_documents(x_client_id)
 
+def get_or_create_document(doc_id: str, client_id: str, gemini_name: str = None, filename: str = None) -> dict:
+    doc = get_document(doc_id, client_id)
+    if not doc and gemini_name:
+        try:
+            logger.info(f"Self-healing SQLite record for document {doc_id} with Gemini name {gemini_name}")
+            doc = add_document(
+                doc_id=doc_id,
+                client_id=client_id,
+                filename=filename or "Restored Document",
+                mime_type="application/pdf" if (filename or "").endswith(".pdf") else "text/plain",
+                gemini_name=gemini_name,
+                size=0
+            )
+        except Exception as e:
+            logger.error(f"Failed to self-heal document record: {str(e)}")
+    return doc
+
 @app.get("/api/documents/{doc_id}")
-def get_document_endpoint(doc_id: str, x_client_id: str = Header(default="anonymous", alias="X-Client-Id")):
+def get_document_endpoint(
+    doc_id: str, 
+    x_client_id: str = Header(default="anonymous", alias="X-Client-Id"),
+    x_gemini_name: str = Header(default=None, alias="X-Gemini-Name"),
+    x_file_name: str = Header(default=None, alias="X-File-Name")
+):
     """
     Get detailed document preview content.
     """
-    doc = get_document(doc_id, x_client_id)
+    doc = get_or_create_document(doc_id, x_client_id, x_gemini_name, x_file_name)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
         
@@ -188,10 +211,12 @@ def get_document_endpoint(doc_id: str, x_client_id: str = Header(default="anonym
         "filename": doc["filename"],
         "mime_type": doc["mime_type"],
         "size": doc["size"],
+        "gemini_name": doc.get("gemini_name"),
         "summary": doc.get("summary"),
         "entities": doc.get("entities"),
         "rewrite": rewrite_data,
-        "chat_history": chat_data
+        "chat_history": chat_data,
+        "full_analysis": doc.get("full_analysis")
     }
 
 @app.get("/api/documents/{doc_id}/file")
@@ -270,14 +295,16 @@ def handle_exception(e: Exception, context: str):
 def analyze_document_endpoint(
     doc_id: str,
     x_client_id: str = Header(default="anonymous", alias="X-Client-Id"),
-    x_gemini_key: str = Header(default=None, alias="X-Gemini-Key")
+    x_gemini_key: str = Header(default=None, alias="X-Gemini-Key"),
+    x_gemini_name: str = Header(default=None, alias="X-Gemini-Name"),
+    x_file_name: str = Header(default=None, alias="X-File-Name")
 ):
     """
     Run full structured AI analysis and persist result in SQLite.
     Returns comprehensive JSON for the dashboard.
     """
     import json
-    doc = get_document(doc_id, x_client_id)
+    doc = get_or_create_document(doc_id, x_client_id, x_gemini_name, x_file_name)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
@@ -367,12 +394,14 @@ def get_rewritten_text(
     doc_id: str,
     payload: RewritePayload,
     x_client_id: str = Header(default="anonymous", alias="X-Client-Id"),
-    x_gemini_key: str = Header(default=None, alias="X-Gemini-Key")
+    x_gemini_key: str = Header(default=None, alias="X-Gemini-Key"),
+    x_gemini_name: str = Header(default=None, alias="X-Gemini-Name"),
+    x_file_name: str = Header(default=None, alias="X-File-Name")
 ):
     """
     Get the AI-rewritten text in a specified tone.
     """
-    doc = get_document(doc_id, x_client_id)
+    doc = get_or_create_document(doc_id, x_client_id, x_gemini_name, x_file_name)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     
@@ -416,12 +445,14 @@ async def chat_with_document(
     doc_id: str,
     payload: ChatPayload,
     x_client_id: str = Header(default="anonymous", alias="X-Client-Id"),
-    x_gemini_key: str = Header(default=None, alias="X-Gemini-Key")
+    x_gemini_key: str = Header(default=None, alias="X-Gemini-Key"),
+    x_gemini_name: str = Header(default=None, alias="X-Gemini-Name"),
+    x_file_name: str = Header(default=None, alias="X-File-Name")
 ):
     """
     SSE stream endpoint for chat dialogue about the document.
     """
-    doc = get_document(doc_id, x_client_id)
+    doc = get_or_create_document(doc_id, x_client_id, x_gemini_name, x_file_name)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     
