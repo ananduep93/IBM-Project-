@@ -1459,14 +1459,49 @@ function LandingPage({ onNavigate }) {
         </section>
       </main>
 
-      <footer className="landing-footer">
-        <p>© {new Date().getFullYear()} AURA Document Analyzer. All rights reserved.</p>
-        <div className="footer-links">
-          <button onClick={() => onNavigate('/about')} type="button">About Us</button>
-          <button onClick={() => onNavigate('/faq')} type="button">FAQ</button>
-          <button onClick={() => onNavigate('/contact')} type="button">Contact</button>
-          <button onClick={() => onNavigate('/privacy')} type="button">Privacy Policy</button>
-          <button onClick={() => onNavigate('/terms')} type="button">Terms of Service</button>
+      <footer className="landing-footer-detailed">
+        <div className="footer-grid">
+          <div className="footer-col brand-col">
+            <div className="footer-brand">
+              <img src="/logo.png" className="logo-img animated-logo" alt="AURA" />
+              <span>AURA</span>
+            </div>
+            <p className="footer-brand-desc">
+              An intelligent, privacy-first document intelligence workspace that summarizes, extracts entities, and rewrites text using Google Gemini.
+            </p>
+            <p className="footer-developer">
+              Developed by <strong>Anandu Ep</strong><br />
+              BCA Student, Don Bosco College, Kerala
+            </p>
+          </div>
+          <div className="footer-col">
+            <h4>Capabilities</h4>
+            <ul>
+              <li><button onClick={() => onNavigate('/login')} type="button">Executive Summarization</button></li>
+              <li><button onClick={() => onNavigate('/login')} type="button">Structured Entity Parsing</button></li>
+              <li><button onClick={() => onNavigate('/login')} type="button">AI Tone Rewriter</button></li>
+              <li><button onClick={() => onNavigate('/login')} type="button">SSE Streaming Q&A Chat</button></li>
+            </ul>
+          </div>
+          <div className="footer-col">
+            <h4>Resources</h4>
+            <ul>
+              <li><button onClick={() => onNavigate('/about')} type="button">About Us</button></li>
+              <li><button onClick={() => onNavigate('/faq')} type="button">FAQ</button></li>
+              <li><button onClick={() => onNavigate('/contact')} type="button">Contact Support</button></li>
+            </ul>
+          </div>
+          <div className="footer-col">
+            <h4>Legal</h4>
+            <ul>
+              <li><button onClick={() => onNavigate('/privacy')} type="button">Privacy Policy</button></li>
+              <li><button onClick={() => onNavigate('/terms')} type="button">Terms of Service</button></li>
+            </ul>
+          </div>
+        </div>
+        <div className="footer-bottom">
+          <p>© {new Date().getFullYear()} AURA Document Analyzer. All rights reserved.</p>
+          <p className="footer-note">Vibe Coding Masterclass Series · IBM SkillsBuild Internship</p>
         </div>
       </footer>
     </div>
